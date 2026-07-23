@@ -1,0 +1,20 @@
+{
+	"name": "phantom-relay",
+	"version": "1.0.0",
+	"description": "Stream relay for phantom_: routes streams (incl. HLS segments) through the relay's IP – run behind a VPN it truly changes the exit IP.",
+	"main": "server.js",
+	"scripts": {
+		"start": "node server.js",
+		"check": "node server.js --check",
+		"typecheck": "tsc --noEmit"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"typescript": "^5.9.3"
+	}
+}

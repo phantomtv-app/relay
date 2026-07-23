@@ -1,0 +1,35 @@
+# phantom_ relay - ONE container (WireGuard + relay). No clone, no build.
+#
+# 1. Put your WireGuard client config as  ./wg0.conf  next to this file.
+# 2. docker compose up -d
+# 3. Check:  docker exec phantom-relay node server.js --check
+#
+# Change the ENV -> `docker compose up -d` (applies it), restart -> `docker restart phantom-relay`.
+
+services:
+  relay:
+    image: ghcr.io/phantomtv-app/relay:latest   # or: docker.io/phantomtvapp/relay:latest
+    container_name: phantom-relay
+    cap_add:
+      - NET_ADMIN                     # for WireGuard in the container
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - ./wg0.conf:/etc/wireguard/wg0.conf:ro   # your VPN config
+    ports:
+      - "8787:8787"
+    environment:
+      - RELAY_VPN_IF=wg0
+      - RELAY_AUTH=open               # open | ip | basic
+      # User/password:
+      #   - RELAY_AUTH=basic
+      #   - RELAY_USER=phantom
+      #   - RELAY_PASS=change-me
+      # or only specific client IPs:
+      #   - RELAY_AUTH=ip
+      #   - RELAY_ALLOW=1.2.3.4,5.6.7.8
+      # Privacy (no egress lookup via ipwho.is):
+      #   - RELAY_EGRESS_LOOKUP=0
+    restart: unless-stopped

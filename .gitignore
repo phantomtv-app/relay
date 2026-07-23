@@ -1,0 +1,16 @@
+# Dependencies. server.js has ZERO runtime deps and runs without them. The only deps are
+# dev-only (typescript + @types/node for the // @ts-check type-check) and are NOT shipped.
+node_modules
+package-lock.json
+
+# Runtime/logs
+*.log
+.DS_Store
+
+# Local configuration/environment
+.env
+*.local
+
+# User's WireGuard client config (contains the PRIVATE KEY!) - NEVER commit
+/wireguard/
+*.conf

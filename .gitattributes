@@ -1,0 +1,4 @@
+# Consistent line endings (LF), platform-appropriate on checkout.
+* text=auto eol=lf
+
+*.png binary

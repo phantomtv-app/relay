@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="phantom">
+  <defs><clipPath id="d"><circle cx="500" cy="500" r="500"/></clipPath></defs>
+  <g clip-path="url(#d)">
+    <circle cx="500" cy="500" r="500" fill="#b7b2ff"/>
+    <circle cx="700" cy="300" r="500" fill="#5b54f0"/>
+  </g>
+</svg>
