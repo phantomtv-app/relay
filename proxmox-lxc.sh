@@ -167,15 +167,19 @@ header_info
 con "${DIM}   CTID ${CTID} · ${CT_HOSTNAME} · ${CORES} vCPU · ${RAM} MiB · ${DISK} GiB · storage ${ROOT_STORE}"
 con "${DIM}   net ${NET_IP}${NET_GW:+ gw ${NET_GW}} · bridge ${BRIDGE} · verbose ${VERBOSE}${CL}\n"
 
-# ---- 1) template -------------------------------------------------------------
-msg_info "Refreshing template catalog"
+# ---- 1) pick the latest available Debian template ---------------------------
+msg_info "Selecting the latest Debian template"
 pveam update || true
-TEMPLATE="$(pveam available --section system 2>/dev/null | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)"
-[ -n "$TEMPLATE" ] || TEMPLATE="debian-12-standard_12.7-1_amd64.tar.zst"
-msg_ok "Template catalog ready"
+# newest debian-<N>-standard from the catalog (major + point release compared naturally).
+# '|| true' keeps an empty result from tripping set -e/pipefail so the checks below can react.
+TEMPLATE="$(pveam available --section system 2>/dev/null | awk '$2 ~ /^debian-[0-9]+-standard/{print $2}' | sort -V | tail -1 || true)"
+# otherwise the newest debian-standard already downloaded on the template storage
+[ -n "$TEMPLATE" ] || TEMPLATE="$(pveam list "$TMPL_STORE" 2>/dev/null | grep -oE 'debian-[0-9]+-standard[^[:space:]]*' | sort -V | tail -1 || true)"
+[ -n "$TEMPLATE" ] || { msg_error "No Debian standard template available (check network / run 'pveam update')."; exit 1; }
+msg_ok "Latest template: $TEMPLATE"
 
 if pveam list "$TMPL_STORE" 2>/dev/null | grep -q "$TEMPLATE"; then
-  msg_ok "Template already present ($TEMPLATE)"
+  msg_ok "Template already present"
 else
   msg_info "Downloading template $TEMPLATE"
   pveam download "$TMPL_STORE" "$TEMPLATE"
