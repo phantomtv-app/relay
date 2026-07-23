@@ -174,7 +174,8 @@ IP (a leak). Two layers, best use both:
 
 One command instead of curl juggling:
 ```bash
-docker exec phantom-relay node server.js --check   # or: node server.js --check  /  npm run check
+phantom-relay --check                                # standalone / Proxmox LXC install
+docker exec phantom-relay node server.js --check     # Docker
 # -> Relay: running · Protection: PROTECTED (VPN active) · Egress: 203.0.113.10 (Germany, …)
 ```
 Exit code: `0` ok/protected · `1` VPN down · `2` unreachable. (The Docker HEALTHCHECK uses it too.)

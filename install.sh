@@ -76,10 +76,20 @@ EOF
 systemctl daemon-reload
 systemctl enable --now phantom-relay
 
+# 5) convenience CLI wrapper so one-shot commands don't need the raw node path.
+#    The relay itself runs as the systemd service above; this is only for e.g. `phantom-relay --check`
+#    (it sources $ENV_FILE so --check talks to the configured PORT).
+cat > /usr/local/bin/phantom-relay <<EOF
+#!/usr/bin/env bash
+set -a; [ -r "$ENV_FILE" ] && . "$ENV_FILE" 2>/dev/null; set +a
+exec /usr/bin/node "$APP_DIR/server.js" "\$@"
+EOF
+chmod +x /usr/local/bin/phantom-relay
+
 PORT_EFF="$(grep -oE '^PORT=[0-9]+' "$ENV_FILE" | cut -d= -f2)"
 echo ""
 echo "== Done =="
 echo "Status:  systemctl status phantom-relay"
-echo "Check:   node $APP_DIR/server.js --check"
+echo "Check:   phantom-relay --check"
 echo "Config:  $ENV_FILE   (then: systemctl restart phantom-relay)"
 echo "In the app:  http://<this-server>:${PORT_EFF:-8787}"

@@ -175,7 +175,8 @@ Vertrauen durch **Messung**.
 
 Ein Befehl statt curl-Bastelei:
 ```bash
-docker exec phantom-relay node server.js --check   # oder: node server.js --check  /  npm run check
+phantom-relay --check                                # Standalone / Proxmox-LXC-Installation
+docker exec phantom-relay node server.js --check     # Docker
 # -> Relay: läuft · Schutz: GESCHÜTZT (VPN aktiv) · Egress: 203.0.113.10 (Germany, …)
 ```
 Exit-Code: `0` ok/geschützt · `1` VPN weg · `2` nicht erreichbar. (Auch der Docker-HEALTHCHECK nutzt das.)
