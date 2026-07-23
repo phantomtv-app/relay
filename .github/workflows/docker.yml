@@ -14,6 +14,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  schedule:
+    # Weekly rebuild (Mon 04:00 UTC) so the rolling base image (latest Node LTS / Alpine)
+    # and its security patches reach the published :latest even without a code change.
+    - cron: '0 4 * * 1'
   workflow_dispatch: {}
 
 env:

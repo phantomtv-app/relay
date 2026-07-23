@@ -24,10 +24,10 @@ echo "== phantom_ Relay – Installer =="
 
 # 1) Ensure Node 18+
 if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 18 ]; then
-  echo "-> Installing Node.js 20 …"
+  echo "-> Installing the latest Node.js LTS …"
   apt-get update -y
   apt-get install -y curl ca-certificates
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
   apt-get install -y nodejs
 fi
 

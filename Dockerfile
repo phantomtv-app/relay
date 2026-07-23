@@ -1,6 +1,7 @@
 # All-in-one image: WireGuard + relay in ONE container.
 # Drop in a config, set the ENV, start it - no clone, no build needed.
-FROM node:20-alpine
+# Base = latest Node LTS on the latest Alpine (rolling tag; every rebuild pulls the newest).
+FROM node:lts-alpine
 
 # WireGuard tools so the container can bring up the VPN itself (when a wg0.conf is mounted).
 RUN apk add --no-cache wireguard-tools bash iptables iproute2 openresolv
