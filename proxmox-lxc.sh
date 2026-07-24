@@ -65,6 +65,22 @@ command -v pct >/dev/null 2>&1 || { echo "This script belongs on the Proxmox VE 
 # ---- prompt helpers (whiptail, falling back to read) ------------------------
 HAS_WHIP=0; command -v whiptail >/dev/null 2>&1 && HAS_WHIP=1
 BT='phantom_ Relay - LXC installer'   # whiptail backdrop (full-screen) - covers anything behind the dialog
+# Colour scheme. whiptail is limited to the 16 terminal colours, so no exact brand hex - "blue" is
+# the closest to phantom_ indigo. The shadow is blended INTO the backdrop so it stops reading as a
+# second frame around the dialog.
+export NEWT_COLORS='
+root=white,blue
+shadow=blue,blue
+window=black,lightgray
+border=blue,lightgray
+title=blue,lightgray
+listbox=black,lightgray
+actlistbox=white,blue
+sellistbox=white,blue
+actsellistbox=white,blue
+button=black,lightgray
+actbutton=white,blue
+'
 abort() { msg_error "Aborted."; rm -f "$LOGFILE" 2>/dev/null || true; exit 1; }
 
 wt_input() { # title prompt default
@@ -85,7 +101,11 @@ wt_yesno() { # title prompt   (returns 0 = yes)
 }
 wt_menu() { # title prompt tag1 item1 tag2 item2 ...   -> echoes chosen tag
   local title="$1" prompt="$2"; shift 2; local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$title" --menu "$prompt" 18 66 8 "$@" 3>&1 1>&2 2>&3) || abort
+  # Size the box to the number of items so there is no large empty area (which read as a 2nd frame).
+  local n=$(( $# / 2 )); [ "$n" -lt 1 ] && n=1
+  local mh=$n; [ "$mh" -gt 8 ] && mh=8            # list height (capped)
+  local h=$(( mh + 7 ))                            # dialog height wraps the list snugly
+  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$title" --menu "$prompt" "$h" 66 "$mh" "$@" 3>&1 1>&2 2>&3) || abort
   else
     echo "$prompt" >/dev/tty; local i=1 tags=()
     while [ $# -gt 0 ]; do echo "  $i) $1 — $2" >/dev/tty; tags+=("$1"); shift 2; i=$((i+1)); done
