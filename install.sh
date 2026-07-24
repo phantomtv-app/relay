@@ -31,6 +31,15 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.spli
   apt-get install -y nodejs
 fi
 
+# 1b) resolvconf provider so wg-quick can apply a `DNS =` line if you run WireGuard on this host.
+#     The relay sets up NO VPN itself - this only avoids the common wg-quick failure
+#     ("resolvconf: command not found"). Skipped on non-apt hosts and when already present.
+if command -v apt-get >/dev/null 2>&1 && ! command -v resolvconf >/dev/null 2>&1; then
+  echo "-> Installing resolvconf (for wg-quick DNS) …"
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y resolvconf || true
+fi
+
 # 2) server.js to $APP_DIR (copy locally, otherwise download)
 mkdir -p "$APP_DIR"
 if [ -f "$SELF_DIR/server.js" ]; then

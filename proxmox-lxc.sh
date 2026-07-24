@@ -220,7 +220,7 @@ msg_ok "Container started"
 
 # ---- 4) install WireGuard + the relay ---------------------------------------
 msg_info "Installing WireGuard + phantom_ relay"
-pct exec "$CTID" -- bash -c "apt-get update -y && apt-get install -y wireguard curl && curl -fsSL $RAW/install.sh | bash"
+pct exec "$CTID" -- bash -c "apt-get update -y && apt-get install -y wireguard resolvconf curl && curl -fsSL $RAW/install.sh | bash"
 msg_ok "phantom_ relay installed"
 
 IP="$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')"
