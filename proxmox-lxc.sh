@@ -64,27 +64,28 @@ command -v pct >/dev/null 2>&1 || { echo "This script belongs on the Proxmox VE 
 
 # ---- prompt helpers (whiptail, falling back to read) ------------------------
 HAS_WHIP=0; command -v whiptail >/dev/null 2>&1 && HAS_WHIP=1
+BT='phantom_ Relay - LXC installer'   # whiptail backdrop (full-screen) - covers anything behind the dialog
 abort() { msg_error "Aborted."; rm -f "$LOGFILE" 2>/dev/null || true; exit 1; }
 
 wt_input() { # title prompt default
   local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --title "$1" --inputbox "$2" 9 64 "$3" 3>&1 1>&2 2>&3) || abort
+  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$1" --inputbox "$2" 9 64 "$3" 3>&1 1>&2 2>&3) || abort
   else read -r -p "$2 [$3]: " v </dev/tty || abort; v="${v:-$3}"; fi
   printf '%s' "$v"
 }
 wt_pass() { # title prompt
   local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --title "$1" --passwordbox "$2" 9 64 3>&1 1>&2 2>&3) || abort
+  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$1" --passwordbox "$2" 9 64 3>&1 1>&2 2>&3) || abort
   else read -r -s -p "$2: " v </dev/tty || abort; echo >/dev/tty; fi
   printf '%s' "$v"
 }
 wt_yesno() { # title prompt   (returns 0 = yes)
-  if [ "$HAS_WHIP" = 1 ]; then whiptail --title "$1" --yesno "$2" 9 64
+  if [ "$HAS_WHIP" = 1 ]; then whiptail --backtitle "$BT" --title "$1" --yesno "$2" 9 64
   else local a; read -r -p "$2 [y/N]: " a </dev/tty || return 1; [[ "$a" =~ ^[yYjJ] ]]; fi
 }
 wt_menu() { # title prompt tag1 item1 tag2 item2 ...   -> echoes chosen tag
   local title="$1" prompt="$2"; shift 2; local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --title "$title" --menu "$prompt" 18 66 8 "$@" 3>&1 1>&2 2>&3) || abort
+  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$title" --menu "$prompt" 18 66 8 "$@" 3>&1 1>&2 2>&3) || abort
   else
     echo "$prompt" >/dev/tty; local i=1 tags=()
     while [ $# -gt 0 ]; do echo "  $i) $1 — $2" >/dev/tty; tags+=("$1"); shift 2; i=$((i+1)); done
@@ -127,17 +128,16 @@ advanced_settings() {
   if wt_yesno 'Verbose' 'Show full output (verbose)? No = quiet, spinner only.'; then VERBOSE="yes"; else VERBOSE="no"; fi
 }
 
-header_info
-
 if [ -t 0 ] && [ -t 1 ]; then
-  case "$(wt_menu 'phantom_ Relay – LXC installer' 'Installation mode' \
+  # Interactive: show the whiptail menu FIRST. The ASCII banner is drawn once later (above the
+  # build log); drawing it before whiptail left remnants around the dialog.
+  case "$(wt_menu 'phantom_ Relay - LXC installer' 'Installation mode' \
             default  'Use default settings' \
             advanced 'Configure manually (ID, CPU, RAM, storage, IP, password, verbose)')" in
     advanced) advanced_settings ;;
     default)  default_settings ;;
     *)        abort ;;
   esac
-  header_info   # whiptail cleared the screen - redraw the banner above the build log
 else
   default_settings
 fi
