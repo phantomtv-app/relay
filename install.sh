@@ -59,7 +59,7 @@ RELAY_AUTH=${RELAY_AUTH:-open}
 # Access protection:
 #   RELAY_AUTH=ip     + RELAY_ALLOW=1.2.3.4,5.6.7.8   (allowed client IPs)
 #   RELAY_AUTH=basic  + RELAY_USER=... RELAY_PASS=...  (username/password)
-# Privacy: RELAY_EGRESS_LOOKUP=0 disables the egress display (ipwho.is).
+# Privacy: RELAY_EGRESS_LOOKUP=0 disables the egress display (when on, uses your own /api/my-ip).
 EOF
   chmod 600 "$ENV_FILE"
   echo "-> Configuration: $ENV_FILE (edit -> 'systemctl restart phantom-relay')"
@@ -85,12 +85,26 @@ EOF
 systemctl daemon-reload
 systemctl enable --now phantom-relay
 
-# 5) convenience CLI wrapper so one-shot commands don't need the raw node path.
-#    The relay itself runs as the systemd service above; this is only for e.g. `phantom-relay --check`
+# 5) convenience CLI wrapper: `phantom-relay setup` (guided VPN setup), plus `phantom-relay --check`.
+#    The relay itself runs as the systemd service above; this wrapper is for one-shot commands
 #    (it sources $ENV_FILE so --check talks to the configured PORT).
 cat > /usr/local/bin/phantom-relay <<EOF
 #!/usr/bin/env bash
 set -a; [ -r "$ENV_FILE" ] && . "$ENV_FILE" 2>/dev/null; set +a
+if [ "\$1" = setup ]; then
+  echo "== phantom_ relay setup =="
+  echo "1) Paste your VPN provider's WireGuard config into the editor."
+  echo "   Keep ONLY the [Interface] / [Peer] block - no editor title bars or extra text."
+  read -rp "   Press Enter to open the editor ... " _
+  "\${EDITOR:-nano}" /etc/wireguard/wg0.conf
+  echo "2) Starting the VPN (wg-quick@wg0) ..."
+  if systemctl enable --now wg-quick@wg0; then wg show; else
+    echo "   VPN did not start - inspect with: journalctl -xeu wg-quick@wg0"; exit 1
+  fi
+  echo ""
+  echo "3) Checking the relay ..."
+  exec /usr/bin/node "$APP_DIR/server.js" --check
+fi
 exec /usr/bin/node "$APP_DIR/server.js" "\$@"
 EOF
 chmod +x /usr/local/bin/phantom-relay
@@ -98,7 +112,8 @@ chmod +x /usr/local/bin/phantom-relay
 PORT_EFF="$(grep -oE '^PORT=[0-9]+' "$ENV_FILE" | cut -d= -f2)"
 echo ""
 echo "== Done =="
-echo "Status:  systemctl status phantom-relay"
-echo "Check:   phantom-relay --check"
-echo "Config:  $ENV_FILE   (then: systemctl restart phantom-relay)"
-echo "In the app:  http://<this-server>:${PORT_EFF:-8787}"
+echo "VPN setup:  phantom-relay setup   (paste your WireGuard config; starts + verifies the VPN)"
+echo "Status:     systemctl status phantom-relay"
+echo "Check:      phantom-relay --check"
+echo "Config:     $ENV_FILE   (then: systemctl restart phantom-relay)"
+echo "In the app: http://<this-server>:${PORT_EFF:-8787}"

@@ -111,8 +111,9 @@ Der Relay schreibt **nichts** über den Verkehr mit: **keine** Zugriffslogs, **k
 Ausgabe ist **ein** Start-Banner (Port + Auth-Modus, keine Nutzerdaten).
 
 Standardmäßig macht der Relay **keinerlei** zusätzliche ausgehende Aufrufe. Optional fragt
-`RELAY_EGRESS_LOOKUP=1` die **eigene** Egress-IP über `ipwho.is` für die `/health`-Anzeige ab (nur
-die VPN-IP des Relays, keine Nutzerdaten).
+`RELAY_EGRESS_LOOKUP=1` die **eigene** Egress-IP über **deinen eigenen Endpunkt** (`RELAY_EGRESS_URL`,
+Standard `https://phantomtv.app/api/my-ip` — kein Dritter) für die `/health`-Anzeige ab (nur die
+VPN-IP des Relays, keine Nutzerdaten).
 
 ---
 
@@ -149,9 +150,14 @@ hängt das automatisch an. Bei `basic` OHNE hinterlegte Zugangsdaten werden **al
 blockiert (Fail-Closed, damit eine Fehlkonfiguration nie versehentlich öffnet).
 
 ### `RELAY_EGRESS_LOOKUP`
-Standard `0` (aus, Datenschutz). Mit `1` fragt der Relay seine **eigene** Egress-IP über `ipwho.is`
-ab und zeigt sie in `/health` (nur die VPN-IP, keine Nutzerdaten). Ist es aus, verifiziert die App
-den Schutz selbst per Egress-Vergleich.
+Standard `0` (aus, Datenschutz). Mit `1` fragt der Relay seine **eigene** Egress-IP über deinen
+eigenen Endpunkt (siehe `RELAY_EGRESS_URL`) ab und zeigt sie in `/health` (nur die VPN-IP, keine
+Nutzerdaten, kein Dritter). Ist es aus, verifiziert die App den Schutz selbst per Egress-Vergleich.
+
+### `RELAY_EGRESS_URL`
+Nur relevant mit `RELAY_EGRESS_LOOKUP=1`. Der „Was ist meine IP"-Endpunkt, den der Relay **durch den
+Tunnel** abfragt, um seine Egress-IP zu erfahren. Standard `https://phantomtv.app/api/my-ip` (eigene
+Infrastruktur, kein Dritter); erwartete Antwort `{"ip":"…","country":"XX"}`. Für andere Deployments überschreibbar.
 
 ---
 

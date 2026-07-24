@@ -30,6 +30,6 @@ services:
       # or only specific client IPs:
       #   - RELAY_AUTH=ip
       #   - RELAY_ALLOW=1.2.3.4,5.6.7.8
-      # Privacy (no egress lookup via ipwho.is):
+      # Privacy (egress lookup off; when on it uses your own /api/my-ip, not a third party):
       #   - RELAY_EGRESS_LOOKUP=0
     restart: unless-stopped

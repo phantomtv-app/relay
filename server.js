@@ -22,7 +22,8 @@
 //   RELAY_AUTH=open|ip|basic  Access control (default: open).
 //     ip:    RELAY_ALLOW=1.2.3.4,5.6.7.8   allowed client IPs
 //     basic: RELAY_USER=... RELAY_PASS=...  username/password (WITHOUT them, EVERYTHING is blocked)
-//   RELAY_EGRESS_LOOKUP=1   turns the exit-IP lookup (ipwho.is) for /health ON (default OFF).
+//   RELAY_EGRESS_LOOKUP=1   show the relay's own exit IP in /health, looked up via RELAY_EGRESS_URL
+//                           (own endpoint, default https://phantomtv.app/api/my-ip). Default OFF.
 //
 // No runtime dependencies (Node 18+ with global fetch).
 
@@ -155,24 +156,28 @@ function vpnState () {
 
 // --- Exit IP (through the VPN); OFF by default (privacy) -----------------------
 const EGRESS_LOOKUP = /^(1|on|true|yes)$/i.test(process.env.RELAY_EGRESS_LOOKUP || '');
+// Own "what is my IP" endpoint, reached THROUGH the tunnel - NOT a third-party service.
+// Defaults to phantom_'s endpoint; override via RELAY_EGRESS_URL for another deployment.
+// Expected response: {"ip":"…","country":"XX"}.
+const EGRESS_URL = process.env.RELAY_EGRESS_URL || 'https://phantomtv.app/api/my-ip';
 /** @type {{ts: number, data: {ip: string, country: string, isp: string}|null}} */
 let egressCache = {ts: 0, data: null};
 
 /**
- * Look up the relay's own exit IP via ipwho.is (only if enabled); short-cached. No user data.
+ * Look up the relay's own exit IP via EGRESS_URL (only if enabled); short-cached. No user data and
+ * no third party - the request goes through the VPN to our own /api/my-ip endpoint.
  * @returns {Promise<{ip: string, country: string, isp: string}|null>}
  */
 async function getEgress () {
-	if (!EGRESS_LOOKUP) return null; // no third-party call unless explicitly requested
+	if (!EGRESS_LOOKUP) return null; // no outbound call unless explicitly requested
 	const now = Date.now();
 	if (egressCache.data && (now - egressCache.ts) < 30000) return egressCache.data;
 	try {
 		const ctrl = new AbortController();
 		const to = setTimeout(() => ctrl.abort(), 3000);
-		const r = await fetch('https://ipwho.is/', {signal: ctrl.signal}).finally(() => clearTimeout(to));
+		const r = await fetch(EGRESS_URL, {signal: ctrl.signal}).finally(() => clearTimeout(to));
 		const j = /** @type {any} */ (await r.json());
-		const conn = j.connection || {};
-		egressCache = {ts: now, data: {ip: j.ip, country: j.country || '', isp: conn.isp || conn.org || ''}};
+		egressCache = {ts: now, data: j.ip ? {ip: j.ip, country: j.country || '', isp: ''} : null};
 	} catch (_e) {
 		egressCache = {ts: now, data: null};
 	}

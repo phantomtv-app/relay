@@ -111,7 +111,8 @@ client IPs, **no** stream data – not to files, not to a database. The only con
 startup banner (port + auth mode, no user data).
 
 By default the relay makes **no** extra outbound calls at all. Optionally, `RELAY_EGRESS_LOOKUP=1`
-has it look up its **own** exit IP via `ipwho.is` for the `/health` display (reveals only the
+has it look up its **own** exit IP via **your own endpoint** (`RELAY_EGRESS_URL`, default
+`https://phantomtv.app/api/my-ip` — no third party) for the `/health` display (reveals only the
 relay's VPN IP, no user data).
 
 ---
@@ -150,8 +151,13 @@ this automatically. With `basic` but no credentials set, **all** `/p` requests a
 
 ### `RELAY_EGRESS_LOOKUP`
 Default `0` (off, for privacy). Set to `1` to have the relay look up its **own** exit IP via
-`ipwho.is` and show it in `/health` (reveals only the VPN IP, no user data). With it off, the app
-verifies protection itself via egress comparison.
+your own endpoint (see `RELAY_EGRESS_URL`) and show it in `/health` (reveals only the VPN IP, no
+user data, no third party). With it off, the app verifies protection itself via egress comparison.
+
+### `RELAY_EGRESS_URL`
+Only relevant with `RELAY_EGRESS_LOOKUP=1`. The "what is my IP" endpoint the relay queries **through
+the tunnel** to learn its exit IP. Default `https://phantomtv.app/api/my-ip` (own infrastructure, no
+third party); expected response `{"ip":"…","country":"XX"}`. Override for a different deployment.
 
 ---
 
