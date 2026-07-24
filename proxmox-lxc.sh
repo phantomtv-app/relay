@@ -62,63 +62,49 @@ EOF
 command -v pct >/dev/null 2>&1 || { echo "This script belongs on the Proxmox VE host (pct is missing)." >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
 
-# ---- prompt helpers (whiptail, falling back to read) ------------------------
-HAS_WHIP=0; command -v whiptail >/dev/null 2>&1 && HAS_WHIP=1
-BT='phantom_ Relay - LXC installer'   # whiptail backdrop (full-screen) - covers anything behind the dialog
-# Colour scheme. whiptail is limited to the 16 terminal colours, so no exact brand hex - "blue" is
-# the closest to phantom_ indigo. The shadow is blended INTO the backdrop so it stops reading as a
-# second frame around the dialog.
-export NEWT_COLORS='
-root=white,blue
-shadow=blue,blue
-window=black,lightgray
-border=blue,lightgray
-title=blue,lightgray
-listbox=black,lightgray
-actlistbox=white,blue
-sellistbox=white,blue
-actsellistbox=white,blue
-button=black,lightgray
-actbutton=white,blue
-'
+# ---- prompts (plain text via /dev/tty - NO ncurses/whiptail, so no rendering artifacts anywhere) --
 abort() { msg_error "Aborted."; rm -f "$LOGFILE" 2>/dev/null || true; exit 1; }
 
-wt_input() { # title prompt default
-  local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$1" --inputbox "$2" 9 64 "$3" 3>&1 1>&2 2>&3) || abort
-  else read -r -p "$2 [$3]: " v </dev/tty || abort; v="${v:-$3}"; fi
-  printf '%s' "$v"
+# ask "question" "default"  -> echoes the answer (the default when the input is empty)
+ask() {
+  local a
+  printf " ${BL}?${CL} %s ${DIM}[%s]${CL}: " "$1" "$2" >/dev/tty
+  read -r a </dev/tty || abort
+  printf '%s' "${a:-$2}"
 }
-wt_pass() { # title prompt
-  local v
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$1" --passwordbox "$2" 9 64 3>&1 1>&2 2>&3) || abort
-  else read -r -s -p "$2: " v </dev/tty || abort; echo >/dev/tty; fi
-  printf '%s' "$v"
+# ask_pass "question"  -> echoes the answer (input hidden; may be empty)
+ask_pass() {
+  local a
+  printf " ${BL}?${CL} %s ${DIM}(empty = auto-generate)${CL}: " "$1" >/dev/tty
+  read -r -s a </dev/tty || abort; printf '\n' >/dev/tty
+  printf '%s' "$a"
 }
-wt_yesno() { # title prompt   (returns 0 = yes)
-  if [ "$HAS_WHIP" = 1 ]; then whiptail --backtitle "$BT" --title "$1" --yesno "$2" 9 64
-  else local a; read -r -p "$2 [y/N]: " a </dev/tty || return 1; [[ "$a" =~ ^[yYjJ] ]]; fi
+# ask_yesno "question" y|n  -> returns 0 for yes
+ask_yesno() {
+  local a hint
+  [ "$2" = y ] && hint='Y/n' || hint='y/N'
+  printf " ${BL}?${CL} %s ${DIM}[%s]${CL}: " "$1" "$hint" >/dev/tty
+  read -r a </dev/tty || abort; a="${a:-$2}"
+  [[ "$a" =~ ^[yYjJ] ]]
 }
-wt_menu() { # title prompt tag1 item1 tag2 item2 ...   -> echoes chosen tag
-  local title="$1" prompt="$2"; shift 2; local v
-  # Size the box to the number of items so there is no large empty area (which read as a 2nd frame).
-  local n=$(( $# / 2 )); [ "$n" -lt 1 ] && n=1
-  local mh=$n; [ "$mh" -gt 8 ] && mh=8            # list height (capped)
-  local h=$(( mh + 7 ))                            # dialog height wraps the list snugly
-  if [ "$HAS_WHIP" = 1 ]; then v=$(whiptail --backtitle "$BT" --title "$title" --menu "$prompt" "$h" 66 "$mh" "$@" 3>&1 1>&2 2>&3) || abort
-  else
-    echo "$prompt" >/dev/tty; local i=1 tags=()
-    while [ $# -gt 0 ]; do echo "  $i) $1 — $2" >/dev/tty; tags+=("$1"); shift 2; i=$((i+1)); done
-    local s; read -r -p "Choice [1]: " s </dev/tty || abort; s="${s:-1}"; v="${tags[$((s-1))]:-${tags[0]}}"
-  fi
-  printf '%s' "$v"
+# ask_menu "question" tag1 label1 tag2 label2 ...  -> echoes the chosen tag
+ask_menu() {
+  local prompt="$1"; shift
+  local tags=() labels=()
+  while [ "$#" -ge 2 ]; do tags+=("$1"); labels+=("$2"); shift 2; done
+  printf " ${BL}?${CL} %s\n" "$prompt" >/dev/tty
+  local i
+  for i in "${!tags[@]}"; do printf "     ${GN}%s${CL}) %s\n" "$((i + 1))" "${labels[i]}" >/dev/tty; done
+  local s
+  printf "   ${DIM}Selection [1]${CL}: " >/dev/tty
+  read -r s </dev/tty || abort; s="${s:-1}"
+  { [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -ge 1 ] && [ "$s" -le "${#tags[@]}" ]; } || s=1
+  printf '%s' "${tags[$((s - 1))]}"
 }
 
 # ---- storage -----------------------------------------------------------------
 # First active storage that supports content type $1 (rootdir | vztmpl).
 pick_storage() { pvesm status -content "$1" 2>/dev/null | awk 'NR>1 && $3=="active"{print $1; exit}'; }
-# Space-separated "tag item tag item …" (items are space-free) for wt_menu.
-storage_menu() { pvesm status -content "$1" 2>/dev/null | awk 'NR>1 && $3=="active"{printf "%s type:%s,free:%dGiB ", $1, $2, $6/1048576}'; }
 
 # ---- settings ----------------------------------------------------------------
 default_settings() {
@@ -131,32 +117,36 @@ default_settings() {
   ROOT_STORE="${ROOT_STORE:-$(pick_storage rootdir)}"
 }
 advanced_settings() {
-  CTID="$(wt_input 'Container ID (VMID)' 'Container / VM ID' "$(pvesh get /cluster/nextid 2>/dev/null)")"
-  CT_HOSTNAME="$(wt_input 'Hostname' 'Container hostname' 'phantom-relay')"
-  CORES="$(wt_input 'CPU' 'Number of CPU cores' '1')"
-  RAM="$(wt_input 'RAM' 'Memory in MiB' '512')"
-  DISK="$(wt_input 'Disk' 'Disk size in GiB' '2')"
-  local sm; sm="$(storage_menu rootdir)"
-  [ -n "$sm" ] || { msg_error "No active storage for the container found."; exit 1; }
-  # shellcheck disable=SC2086
-  ROOT_STORE="$(wt_menu 'Storage' 'Which storage should hold the container?' $sm)"
-  NET_IP="$(wt_input 'Network / IP' 'IPv4 as CIDR (e.g. 192.168.1.50/24) or "dhcp"' 'dhcp')"
+  CTID="$(ask 'Container ID (VMID)' "$(pvesh get /cluster/nextid 2>/dev/null)")"
+  CT_HOSTNAME="$(ask 'Hostname' 'phantom-relay')"
+  CORES="$(ask 'CPU cores' '1')"
+  RAM="$(ask 'Memory in MiB' '512')"
+  DISK="$(ask 'Disk size in GiB' '2')"
+  # Storage picker: build "tag label" pairs from the active rootdir storages.
+  local args=() tag typ av
+  while read -r tag typ _ _ _ av _; do
+    av="${av//[!0-9]/}"
+    args+=("$tag" "$tag  (${typ}, $(( ${av:-0} / 1048576 )) GiB free)")
+  done < <(pvesm status -content rootdir 2>/dev/null | awk 'NR>1 && $3=="active"')
+  [ "${#args[@]}" -gt 0 ] || { msg_error "No active storage for the container found."; exit 1; }
+  ROOT_STORE="$(ask_menu 'Which storage should hold the container?' "${args[@]}")"
+  NET_IP="$(ask 'IPv4 as CIDR (e.g. 192.168.1.50/24) or "dhcp"' 'dhcp')"
   NET_GW=""
-  [ "$NET_IP" = dhcp ] || NET_GW="$(wt_input 'Gateway' 'Gateway IP (required for a static address)' '')"
-  PASSWORD="$(wt_pass 'Root / SSH password' 'Root password (leave empty to auto-generate)')"
+  [ "$NET_IP" = dhcp ] || NET_GW="$(ask 'Gateway IP' '')"
+  PASSWORD="$(ask_pass 'Root / SSH password')"
   [ -n "$PASSWORD" ] || PASSWORD="$(openssl rand -base64 12)"
-  if wt_yesno 'Verbose' 'Show full output (verbose)? No = quiet, spinner only.'; then VERBOSE="yes"; else VERBOSE="no"; fi
+  if ask_yesno 'Show full output (verbose)?' n; then VERBOSE="yes"; else VERBOSE="no"; fi
 }
 
+# Plain-text banner + menu (no ncurses). Safe to draw the banner first now.
+header_info
+
 if [ -t 0 ] && [ -t 1 ]; then
-  # Interactive: show the whiptail menu FIRST. The ASCII banner is drawn once later (above the
-  # build log); drawing it before whiptail left remnants around the dialog.
-  case "$(wt_menu 'phantom_ Relay - LXC installer' 'Installation mode' \
+  case "$(ask_menu 'Installation mode:' \
             default  'Use default settings' \
             advanced 'Configure manually (ID, CPU, RAM, storage, IP, password, verbose)')" in
     advanced) advanced_settings ;;
-    default)  default_settings ;;
-    *)        abort ;;
+    *)        default_settings ;;
   esac
 else
   default_settings
@@ -183,7 +173,6 @@ fi
 # From here on: in non-verbose mode send everything to the log; the console keeps only fd 3.
 [ "$VERBOSE" = yes ] || exec >>"$LOGFILE" 2>&1
 
-header_info
 con "${DIM}   CTID ${CTID} · ${CT_HOSTNAME} · ${CORES} vCPU · ${RAM} MiB · ${DISK} GiB · storage ${ROOT_STORE}"
 con "${DIM}   net ${NET_IP}${NET_GW:+ gw ${NET_GW}} · bridge ${BRIDGE} · verbose ${VERBOSE}${CL}\n"
 
