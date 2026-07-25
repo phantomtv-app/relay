@@ -59,7 +59,13 @@ RELAY_AUTH=${RELAY_AUTH:-open}
 # Access protection:
 #   RELAY_AUTH=ip     + RELAY_ALLOW=1.2.3.4,5.6.7.8   (allowed client IPs)
 #   RELAY_AUTH=basic  + RELAY_USER=... RELAY_PASS=...  (username/password)
-# Privacy: RELAY_EGRESS_LOOKUP=0 disables the egress display (when on, uses your own /api/my-ip).
+# Egress display is ON by default (uses your own /api/my-ip, not a third party):
+#   RELAY_EGRESS_LOOKUP=0   disables it (no extra outbound call at all)
+# Behind a reverse proxy set a fixed public base (else the Host header is used):
+#   RELAY_PUBLIC_URL=https://relay.example
+#   RELAY_TRUSTED_PROXIES=1.2.3.4     (only these proxy IPs may set X-Forwarded-*)
+# Active leak self-check (report vpn:false if egress equals your real, non-VPN IP):
+#   RELAY_REAL_IP=203.0.113.9
 EOF
   chmod 600 "$ENV_FILE"
   echo "-> Configuration: $ENV_FILE (edit -> 'systemctl restart phantom-relay')"
@@ -117,3 +123,21 @@ echo "Status:     systemctl status phantom-relay"
 echo "Check:      phantom-relay --check"
 echo "Config:     $ENV_FILE   (then: systemctl restart phantom-relay)"
 echo "In the app: http://<this-server>:${PORT_EFF:-8787}"
+echo ""
+echo "== Real kill switch (STRONGLY recommended) =="
+echo "The relay's fail-closed only checks that the tunnel INTERFACE exists - it is NOT a true kill"
+echo "switch. Add an OS-level OUTPUT-deny so no packet can leave except via the tunnel (wg0). Example"
+echo "(nftables; replace 51820 with your VPN provider's UDP port):"
+cat <<'NFT'
+  table inet killswitch {
+    chain output {
+      type filter hook output priority 0; policy drop;
+      oifname "lo" accept
+      oifname "wg0" accept
+      udp dport 51820 accept          # WireGuard handshake to your VPN endpoint
+      ct state established,related accept
+    }
+  }
+NFT
+echo "Save as /etc/nftables.conf (or an include) and: systemctl enable --now nftables"
+echo "Optionally set RELAY_REAL_IP=<your real non-VPN IP> so /health reports vpn:false on a leak."

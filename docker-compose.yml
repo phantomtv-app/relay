@@ -30,6 +30,11 @@ services:
       # or only specific client IPs:
       #   - RELAY_AUTH=ip
       #   - RELAY_ALLOW=1.2.3.4,5.6.7.8
-      # Privacy (egress lookup off; when on it uses your own /api/my-ip, not a third party):
+      # Egress lookup is ON by default (uses your own /api/my-ip, not a third party); opt out with:
       #   - RELAY_EGRESS_LOOKUP=0
+      # Behind a reverse proxy, set the fixed public base (else the Host header is used):
+      #   - RELAY_PUBLIC_URL=https://relay.example
+      #   - RELAY_TRUSTED_PROXIES=  # comma list of proxy IPs allowed to set X-Forwarded-*
+      # Active leak self-check (report vpn:false if egress equals your real, non-VPN IP):
+      #   - RELAY_REAL_IP=
     restart: unless-stopped
