@@ -219,8 +219,13 @@ for _ in $(seq 1 15); do pct exec "$CTID" -- test -e /etc/os-release 2>/dev/null
 msg_ok "Container started"
 
 # ---- 4) install WireGuard + the relay ---------------------------------------
+# IMPORTANT: run install.sh from a FILE, never piped as 'curl ... | bash'. With a pipe the script
+# arrives on STDIN; the moment apt/dpkg (or any sub-command) reads from stdin it swallows the REST
+# of the script text, so bash silently skips everything after that point (e.g. the phantom-relay
+# CLI wrapper) and STILL exits 0 -> "installed" but 'phantom-relay: command not found'. Downloading
+# to a file and running it with stdin from /dev/null makes the whole script execute deterministically.
 msg_info "Installing WireGuard + phantom_ relay"
-pct exec "$CTID" -- bash -c "apt-get update -y && apt-get install -y wireguard resolvconf curl && curl -fsSL $RAW/install.sh | bash"
+pct exec "$CTID" -- bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update -y && apt-get install -y wireguard resolvconf curl && curl -fsSL $RAW/install.sh -o /root/phantom-install.sh && bash /root/phantom-install.sh </dev/null && rm -f /root/phantom-install.sh"
 msg_ok "phantom_ relay installed"
 
 IP="$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')"
