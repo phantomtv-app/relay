@@ -23,7 +23,8 @@
 //     ip:    RELAY_ALLOW=1.2.3.4,5.6.7.8   allowed client IPs
 //     basic: RELAY_USER=... RELAY_PASS=...  username/password (WITHOUT them, EVERYTHING is blocked)
 //   RELAY_EGRESS_LOOKUP=1   show the relay's own exit IP in /health, looked up via RELAY_EGRESS_URL
-//                           (own endpoint, default https://phantomtv.app/api/my-ip). Default OFF.
+//                           (own endpoint, default https://phantomtv.app/api/my-ip). Default ON
+//                           (opt-out with =0); enables the app's own-IP-vs-relay-IP comparison.
 //
 // No runtime dependencies (Node 18+ with global fetch).
 
@@ -155,7 +156,11 @@ function vpnState () {
 }
 
 // --- Exit IP (through the VPN); OFF by default (privacy) -----------------------
-const EGRESS_LOOKUP = /^(1|on|true|yes)$/i.test(process.env.RELAY_EGRESS_LOOKUP || '');
+// Default ON: /health meldet die eigene Ausgangs-IP, damit die App den IP-Vergleich (eigene IP
+// vs. Relay-Ausgangs-IP) zuverlässig zeigen kann, ohne den unzuverlässigen /p-Stream-Proxy. Der
+// Abruf geht DURCH den Tunnel an den eigenen /api/my-ip-Endpunkt (kein Dritt-Dienst, keine
+// Nutzerdaten). Opt-out mit RELAY_EGRESS_LOOKUP=0.
+const EGRESS_LOOKUP = /^(1|on|true|yes)$/i.test(process.env.RELAY_EGRESS_LOOKUP || '1');
 // Own "what is my IP" endpoint, reached THROUGH the tunnel - NOT a third-party service.
 // Defaults to phantom_'s endpoint; override via RELAY_EGRESS_URL for another deployment.
 // Expected response: {"ip":"…","country":"XX"}.
