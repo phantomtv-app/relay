@@ -113,21 +113,57 @@ EOF
 cat > /usr/local/bin/phantom-relay <<EOF
 #!/usr/bin/env bash
 set -a; [ -r "$ENV_FILE" ] && . "$ENV_FILE" 2>/dev/null; set +a
-if [ "\$1" = setup ]; then
-  echo "== phantom_ relay setup =="
-  echo "1) Paste your VPN provider's WireGuard config into the editor."
-  echo "   Keep ONLY the [Interface] / [Peer] block - no editor title bars or extra text."
-  read -rp "   Press Enter to open the editor ... " _
-  "\${EDITOR:-nano}" /etc/wireguard/wg0.conf
-  echo "2) Starting the VPN (wg-quick@wg0) ..."
-  if systemctl enable --now wg-quick@wg0; then wg show; else
-    echo "   VPN did not start - inspect with: journalctl -xeu wg-quick@wg0"; exit 1
-  fi
-  echo ""
-  echo "3) Checking the relay ..."
-  exec $NODE_BIN "$APP_DIR/server.js" --check
-fi
-exec $NODE_BIN "$APP_DIR/server.js" "\$@"
+# The relay itself runs as the 'phantom-relay' systemd service. This wrapper NEVER starts a second
+# copy of server.js for control commands (that would fight the service for port \${PORT:-8787} ->
+# EADDRINUSE). Service control goes through systemctl; only --check runs node, in CLIENT mode
+# (it talks to the already-running relay and exits, it does not listen).
+cmd="\${1:-help}"
+case "\$cmd" in
+  setup)
+    echo "== phantom_ relay setup =="
+    echo "1) Paste your VPN provider's WireGuard config into the editor."
+    echo "   Keep ONLY the [Interface] / [Peer] block - no editor title bars or extra text."
+    read -rp "   Press Enter to open the editor ... " _
+    "\${EDITOR:-nano}" /etc/wireguard/wg0.conf
+    # Configs pasted from web portals often carry CRLF line endings or a leading BOM. 'wg setconf'
+    # then rejects those lines ("Line unrecognized: PrivateKey=..."). Strip a BOM + all CR so the
+    # config parses no matter where it was copied from; tighten perms (it holds the private key).
+    sed -i '1s/^\xEF\xBB\xBF//; s/\r\$//' /etc/wireguard/wg0.conf 2>/dev/null || true
+    chmod 600 /etc/wireguard/wg0.conf 2>/dev/null || true
+    echo "2) Starting the VPN (wg-quick@wg0) ..."
+    if systemctl enable --now wg-quick@wg0; then
+      wg show
+      echo ""
+      echo "3) Restarting the relay so it picks up the tunnel ..."
+      systemctl restart phantom-relay
+      echo "4) Verifying ..."
+      exec $NODE_BIN "$APP_DIR/server.js" --check
+    else
+      echo ""
+      echo "   VPN did NOT start. Most recent errors:"
+      journalctl -u wg-quick@wg0 -n 20 --no-pager 2>/dev/null | sed 's/^/     /'
+      echo "   Full log:  journalctl -xeu wg-quick@wg0"
+      exit 1
+    fi
+    ;;
+  --check|check) exec $NODE_BIN "$APP_DIR/server.js" --check ;;
+  status)        exec systemctl --no-pager status phantom-relay ;;
+  start)         exec systemctl start phantom-relay ;;
+  stop)          exec systemctl stop phantom-relay ;;
+  restart)       exec systemctl restart phantom-relay ;;
+  logs)          exec journalctl -u phantom-relay -n 100 --no-pager ;;
+  help|-h|--help)
+    echo "phantom-relay <command>"
+    echo "  setup      configure + start the VPN (wg0), then verify the relay"
+    echo "  status     show the relay service status"
+    echo "  start | stop | restart   control the relay systemd service"
+    echo "  logs       show the last 100 relay log lines"
+    echo "  --check    probe the RUNNING relay (VPN active? egress IP) - does NOT start a 2nd copy"
+    exit 0 ;;
+  *)
+    echo "phantom-relay: unknown command '\$cmd'  (try: phantom-relay help)" >&2
+    exit 2 ;;
+esac
 EOF
 chmod +x /usr/local/bin/phantom-relay
 
