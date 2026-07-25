@@ -34,10 +34,21 @@ fi
 # 1b) resolvconf provider so wg-quick can apply a `DNS =` line if you run WireGuard on this host.
 #     The relay sets up NO VPN itself - this only avoids the common wg-quick failure
 #     ("resolvconf: command not found"). Skipped on non-apt hosts and when already present.
+#     IMPORTANT: installing resolvconf REPLACES /etc/resolv.conf with a managed file that is
+#     initially EMPTY -> DNS would break for EVERY step after this (e.g. downloading server.js,
+#     or the very next command in a wrapping installer). So capture the current nameservers first
+#     and feed them straight back into resolvconf, then rebuild resolv.conf.
 if command -v apt-get >/dev/null 2>&1 && ! command -v resolvconf >/dev/null 2>&1; then
   echo "-> Installing resolvconf (for wg-quick DNS) …"
+  _NS="$(grep -E '^nameserver ' /etc/resolv.conf 2>/dev/null || true)"
+  [ -n "$_NS" ] || _NS='nameserver 1.1.1.1'
   apt-get update -y >/dev/null 2>&1 || true
   apt-get install -y resolvconf || true
+  # keep DNS working: seed resolvconf's base with the nameservers we had, then rebuild resolv.conf
+  [ -d /etc/resolvconf/resolv.conf.d ] && printf '%s\n' "$_NS" > /etc/resolvconf/resolv.conf.d/base || true
+  command -v resolvconf >/dev/null 2>&1 && resolvconf -u 2>/dev/null || true
+  # last resort: if resolv.conf still has no nameserver, write one directly so the next step resolves
+  grep -qE '^nameserver ' /etc/resolv.conf 2>/dev/null || printf '%s\n' "$_NS" > /etc/resolv.conf
 fi
 
 # 2) server.js to $APP_DIR (copy locally, otherwise download)
