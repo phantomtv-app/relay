@@ -71,6 +71,12 @@ EOF
   echo "-> Configuration: $ENV_FILE (edit -> 'systemctl restart phantom-relay')"
 fi
 
+# Resolve the Node binary dynamically. NodeSource usually installs it at /usr/bin/node, but the
+# path can differ per host/template. A wrong ExecStart path would make the service crash instantly
+# and (under 'set -e') abort the rest of the installer -> the 'phantom-relay' wrapper would be
+# missing ("command not found"). So always use the real path.
+NODE_BIN="$(command -v node || echo /usr/bin/node)"
+
 # 4) systemd service
 cat > "$SERVICE" <<EOF
 [Unit]
@@ -80,7 +86,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=$ENV_FILE
-ExecStart=/usr/bin/node $APP_DIR/server.js
+ExecStart=$NODE_BIN $APP_DIR/server.js
 Restart=always
 DynamicUser=yes
 
@@ -88,12 +94,11 @@ DynamicUser=yes
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now phantom-relay
-
-# 5) convenience CLI wrapper: `phantom-relay setup` (guided VPN setup), plus `phantom-relay --check`.
-#    The relay itself runs as the systemd service above; this wrapper is for one-shot commands
-#    (it sources $ENV_FILE so --check talks to the configured PORT).
+# 5) Create the 'phantom-relay' CLI wrapper FIRST - BEFORE starting the service.
+#    Chicken-and-egg: on a fresh host no VPN is set up yet; the service is then fail-closed and
+#    'systemctl start' may fail. But the wrapper is exactly the tool the user needs to set up the
+#    VPN via 'phantom-relay setup'. So it MUST exist independently of the service start - otherwise
+#    you're left without 'phantom-relay' (command not found).
 cat > /usr/local/bin/phantom-relay <<EOF
 #!/usr/bin/env bash
 set -a; [ -r "$ENV_FILE" ] && . "$ENV_FILE" 2>/dev/null; set +a
@@ -109,11 +114,18 @@ if [ "\$1" = setup ]; then
   fi
   echo ""
   echo "3) Checking the relay ..."
-  exec /usr/bin/node "$APP_DIR/server.js" --check
+  exec $NODE_BIN "$APP_DIR/server.js" --check
 fi
-exec /usr/bin/node "$APP_DIR/server.js" "\$@"
+exec $NODE_BIN "$APP_DIR/server.js" "\$@"
 EOF
 chmod +x /usr/local/bin/phantom-relay
+
+# 6) Enable the service. Start deliberately TOLERANT: without an active VPN the relay is fail-closed
+#    and the start may fail (depending on host) - this must NOT abort the installer, otherwise the
+#    setup stays incomplete. The user then sets up the VPN via 'phantom-relay setup' and restarts.
+systemctl daemon-reload
+systemctl enable phantom-relay >/dev/null 2>&1 || true
+systemctl start phantom-relay || echo "WARN: relay service not active yet (VPN missing? -> 'phantom-relay setup', then 'systemctl restart phantom-relay')."
 
 PORT_EFF="$(grep -oE '^PORT=[0-9]+' "$ENV_FILE" | cut -d= -f2)"
 echo ""
