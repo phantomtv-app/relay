@@ -17,8 +17,10 @@
 // unchecked DNS lookup between check and connect -> no DNS-rebinding / TOCTOU). Host header + TLS
 // SNI keep the original hostname. Every redirect target is re-checked and re-pinned.
 //
-// FAIL-CLOSED: if the VPN drops (interface gone), /p refuses to forward anything (HTTP 503). NOTE:
-// this is an INTERFACE-PRESENCE guard, not a true OS kill switch. For a real kill switch add an
+// FAIL-CLOSED: /p forwards ONLY while an expected VPN interface is present AND up. If no VPN
+// interface is known/active (missing, gone, or none detected at all), /p refuses everything
+// (HTTP 503) - unless RELAY_ALLOW_UNPROTECTED=1 is set (dev opt-out). NOTE: this is an
+// INTERFACE-PRESENCE guard, not a true OS kill switch. For a real kill switch add an
 // nftables/namespace OUTPUT-deny for everything except the tunnel (see README.de.md "Kill-Switch").
 //
 // RESOURCE LIMITS: global concurrency cap, simple per-client rate limit, playlist size cap enforced
@@ -27,9 +29,11 @@
 // Configuration (all optional, via ENV):
 //   PORT=8787
 //   RELAY_VPN_IF=wg0        VPN interface. Recommended to set explicitly (unambiguous fail-closed).
-//   RELAY_AUTH=open|ip|basic  Access control (default: open).
+//   RELAY_ALLOW_UNPROTECTED=1  DEV ONLY: disable the VPN fail-closed guard (forward without a VPN).
+//   RELAY_AUTH=ip|basic|open  Access control. NO default -> if unset (or invalid), /p is DENIED.
 //     ip:    RELAY_ALLOW=1.2.3.4,5.6.7.8   allowed client IPs
 //     basic: RELAY_USER=... RELAY_PASS=...  username/password (WITHOUT them, EVERYTHING is blocked)
+//     open:  no access control (trusted LAN only) - must be set EXPLICITLY.
 //   RELAY_PUBLIC_URL=https://relay.example   fixed public base for HLS rewriting (recommended when
 //                           behind a reverse proxy; otherwise the Host header is used).
 //   RELAY_TRUSTED_PROXIES=  comma list of proxy IPs whose X-Forwarded-Proto/-Host are honored.
@@ -81,8 +85,14 @@ const PUBLIC_URL = (process.env.RELAY_PUBLIC_URL || '').replace(/\/+$/, '');
 const TRUSTED_PROXIES = (process.env.RELAY_TRUSTED_PROXIES || '').split(',').map((s) => s.trim()).filter(Boolean);
 const REAL_IP = (process.env.RELAY_REAL_IP || '').trim();
 
-// --- Access control: open | ip | basic ----------------------------------------
-const AUTH_MODE = (process.env.RELAY_AUTH || 'open').toLowerCase();
+// Dev opt-out for the VPN fail-closed guard. When set, /p forwards even WITHOUT an active VPN
+// interface (traffic may leave via the real IP). NEVER set this in production.
+const ALLOW_UNPROTECTED = /^(1|on|true|yes)$/i.test(process.env.RELAY_ALLOW_UNPROTECTED || '');
+
+// --- Access control: ip | basic | open (NO default -> unset means deny) --------
+// SECURITY: there is deliberately NO 'open' default. If RELAY_AUTH is unset (or invalid), the mode
+// is 'deny' and every /p request is refused (fail-closed). 'open' (no protection) must be opted in.
+const AUTH_MODE = (process.env.RELAY_AUTH || 'deny').toLowerCase();
 const ALLOW_IPS = (process.env.RELAY_ALLOW || '').split(',').map((s) => s.trim()).filter(Boolean);
 const AUTH_USER = process.env.RELAY_USER || '';
 const AUTH_PASS = process.env.RELAY_PASS || '';
@@ -136,7 +146,8 @@ function authOk (req, url) {
 		return !!(k && safeEqual(k, AUTH_K));
 	}
 	if (AUTH_MODE === 'open') return true;
-	// Unbekannter/vertippter Modus (z. B. RELAY_AUTH=bsic) -> FAIL-CLOSED, nicht versehentlich offen.
+	// 'deny' (unset RELAY_AUTH) or an unknown/typo'd mode (e.g. RELAY_AUTH=bsic) -> FAIL-CLOSED,
+	// never accidentally open.
 	return false;
 }
 
@@ -377,6 +388,23 @@ function protectionStatus (eg) {
 	const st = vpnState();
 	if (REAL_IP && eg && eg.ip && eg.ip === REAL_IP) return {vpn: false, iface: st.iface};
 	return {vpn: st.known ? st.up : null, iface: st.iface};
+}
+
+/**
+ * Strong protection attest for /health. Reports `true` ONLY when both hold: (a) an expected VPN
+ * interface is present AND up, and (b) the active egress self-test PASSES - RELAY_REAL_IP is set and
+ * the measured egress IP differs from it (so traffic provably does not leave via the real IP). If
+ * RELAY_REAL_IP is not configured, protection is NOT asserted (the app then decides via its own
+ * egress comparison / stays opt-out). Reuses getEgress()'s result (passed in) and vpnState().
+ * @param {{ip: string, country: string, isp: string}|null} eg
+ * @returns {boolean}
+ */
+function protectedAttest (eg) {
+	const st = vpnState();
+	if (!(st.known && st.up)) return false;   // (a) VPN interface must be active
+	if (!REAL_IP) return false;               // (b) no real-IP baseline -> cannot prove effectiveness
+	if (!eg || !eg.ip) return false;          // egress unknown -> cannot prove effectiveness
+	return eg.ip !== REAL_IP;                 // egress differs from the real IP -> tunnel is effective
 }
 
 // --- Playlist rewriting (HLS) -------------------------------------------------
@@ -638,15 +666,19 @@ const server = http.createServer(async (req, res) => {
 		// allowlisted IP, or open mode) or a loopback caller (local --check).
 		const eg = await getEgress();
 		const {vpn, iface} = protectionStatus(eg);
+		// Strong attest: true ONLY with an active VPN AND a passing egress self-test (see fn). This is
+		// the signal the app trusts to claim real protection; it stays false without RELAY_REAL_IP.
+		const isProt = protectedAttest(eg);
 		const detailed = authOk(req, url) || isLoopback(clientIp(req));
 		res.writeHead(200, headers);
 		if (!detailed) {
-			res.end(JSON.stringify({ok: true, vpn}));
+			res.end(JSON.stringify({ok: true, vpn, protected: isProt}));
 			return;
 		}
 		res.end(JSON.stringify({
 			ok: true,
 			vpn,
+			protected: isProt,
 			iface,
 			ip: (eg && eg.ip) || null,
 			// Die IP, die DAS RELAY vom Client sieht (die es ohnehin im TCP-Header hat). Damit kann die
@@ -675,10 +707,12 @@ const server = http.createServer(async (req, res) => {
 		return;
 	}
 
-	// FAIL-CLOSED: if the expected VPN interface is gone, forward NOTHING.
+	// FAIL-CLOSED: forward ONLY while an expected VPN interface is present AND up. Without an active
+	// VPN (interface gone, or none known/detected at all), forward NOTHING - unless the operator
+	// explicitly opted out for local dev via RELAY_ALLOW_UNPROTECTED=1.
 	const vpn = vpnState();
-	if (vpn.known && !vpn.up) {
-		endText(res, 503, 'relay blocked: VPN down (fail-closed)');
+	if (!(vpn.known && vpn.up) && !ALLOW_UNPROTECTED) {
+		endText(res, 503, 'relay blocked: no active VPN (fail-closed)');
 		return;
 	}
 
@@ -813,16 +847,23 @@ if (process.argv.includes('--check')) {
 } else {
 	server.listen(PORT, () => {
 		const vpn = vpnState();
+		const failClosed = ALLOW_UNPROTECTED ? 'DISABLED (RELAY_ALLOW_UNPROTECTED)' : 'active';
 		// Startup banner (config only, NO user data). Nothing is logged afterwards.
 		// eslint-disable-next-line no-console
-		console.log(`phantom_ relay · port ${PORT} · VPN: ${vpn.iface || '(none)'} · fail-closed: ${vpn.known ? 'active' : 'off'} · auth: ${AUTH_MODE} · limits: conc=${MAX_CONCURRENT || 'off'} rate=${RATE_MAX ? RATE_MAX + '/' + Math.round(RATE_WINDOW_MS / 1000) + 's' : 'off'}`);
-		if (!vpn.known) {
+		console.log(`phantom_ relay · port ${PORT} · VPN: ${vpn.iface || '(none)'} · fail-closed: ${failClosed} · auth: ${AUTH_MODE} · limits: conc=${MAX_CONCURRENT || 'off'} rate=${RATE_MAX ? RATE_MAX + '/' + Math.round(RATE_WINDOW_MS / 1000) + 's' : 'off'}`);
+		if (ALLOW_UNPROTECTED) {
 			// eslint-disable-next-line no-console
-			console.warn('WARN: no VPN interface detected -> fail-closed inactive. Set RELAY_VPN_IF (e.g. wg0), otherwise the relay may forward unprotected.');
+			console.warn('WARN: RELAY_ALLOW_UNPROTECTED=1 -> the VPN fail-closed guard is OFF; /p may forward WITHOUT VPN protection. Dev only.');
+		} else if (!(vpn.known && vpn.up)) {
+			// eslint-disable-next-line no-console
+			console.warn('WARN: no active VPN interface -> ALL /p requests are blocked (fail-closed). Set RELAY_VPN_IF (e.g. wg0) and bring the tunnel up, or set RELAY_ALLOW_UNPROTECTED=1 for local dev.');
 		}
 		if (AUTH_MODE === 'basic' && !AUTH_K) {
 			// eslint-disable-next-line no-console
 			console.warn('WARN: RELAY_AUTH=basic without RELAY_USER/RELAY_PASS -> ALL /p requests are blocked.');
+		} else if (AUTH_MODE !== 'ip' && AUTH_MODE !== 'basic' && AUTH_MODE !== 'open') {
+			// eslint-disable-next-line no-console
+			console.warn(`WARN: RELAY_AUTH is unset/invalid ('${AUTH_MODE}') -> ALL /p requests are blocked (fail-closed). Set RELAY_AUTH=ip or basic (or 'open' only on a trusted network).`);
 		}
 	});
 }

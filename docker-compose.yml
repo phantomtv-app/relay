@@ -19,17 +19,23 @@ services:
     volumes:
       - ./wg0.conf:/etc/wireguard/wg0.conf:ro   # your VPN config
     ports:
-      - "8787:8787"
+      # Safe default: bound to localhost only. To reach the relay from your TV/LAN, change this to
+      # "8787:8787" (all interfaces) - but set an access mode (RELAY_AUTH=basic/ip) below FIRST.
+      - "127.0.0.1:8787:8787"
     environment:
       - RELAY_VPN_IF=wg0
-      - RELAY_AUTH=open               # open | ip | basic
-      # User/password:
+      # Access control. NO default: if RELAY_AUTH is unset the relay DENIES /p (fail-closed). Pick one.
+      # User/password (recommended; use a strong random secret):
       #   - RELAY_AUTH=basic
       #   - RELAY_USER=phantom
       #   - RELAY_PASS=change-me
       # or only specific client IPs:
       #   - RELAY_AUTH=ip
       #   - RELAY_ALLOW=1.2.3.4,5.6.7.8
+      # or, ONLY on a trusted LAN, no access control at all (explicit opt-in):
+      #   - RELAY_AUTH=open
+      # Local dev without a VPN (disables the fail-closed guard -> forwards UNPROTECTED, dev only):
+      #   - RELAY_ALLOW_UNPROTECTED=1
       # Egress lookup is ON by default (uses your own /api/my-ip, not a third party); opt out with:
       #   - RELAY_EGRESS_LOOKUP=0
       # Behind a reverse proxy, set the fixed public base (else the Host header is used):

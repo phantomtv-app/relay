@@ -92,13 +92,17 @@ Installiert Node (falls nötig), den Relay nach `/opt/phantom-relay` und den sys
 
 ## Zugangsschutz
 
-Drei Modi über `RELAY_AUTH` (die App bekommt demnächst passende Felder):
+Drei Modi über `RELAY_AUTH`. **Es gibt keinen `open`-Standard mehr:** ist `RELAY_AUTH` nicht (oder
+ungültig) gesetzt, **blockt der Relay `/p` komplett** (Fail-Closed) — du musst einen Modus **aktiv
+wählen**. Der `install.sh` legt beim ersten Lauf automatisch `basic` mit einem **starken Zufalls-
+Passwort** an.
 
 | Modus | Setzt du | Wirkung |
 |---|---|---|
-| `open` (Standard) | – | Kein Schutz. Nur im eigenen/vertrauten Netz. |
+| _(nicht gesetzt)_ | – | **Deny.** `/p` wird blockiert (Fail-Closed). Sicherer Standard. |
 | `ip` | `RELAY_ALLOW=1.2.3.4,5.6.7.8` | Nur diese Client-IPs dürfen `/p`. |
 | `basic` | `RELAY_USER=…` `RELAY_PASS=…` | Benutzer/Passwort. Per `Authorization: Basic` **und** (für `<video>` ohne Header) als `?k=<base64(user:pass)>` in der URL. |
+| `open` | – (ausdrücklich setzen) | Kein Schutz. **Nur** im eigenen/vertrauten Netz. |
 
 `/health` bleibt offen (nur Liveness/Status, keine Inhalte).
 
@@ -135,10 +139,18 @@ bestimmen, ist Fail-Closed inaktiv (der Relay warnt beim Start) und der Schutz h
 Egress-Vergleich der App — also setzen.
 
 ### `RELAY_AUTH`
-Zugangsschutz-Modus:
-- `open` (Standard) — kein Schutz. Nur im eigenen/vertrauten Netz.
+Zugangsschutz-Modus. **Kein Standard** — ohne (oder bei ungültigem) Wert blockt der Relay `/p`
+komplett (Fail-Closed, damit nichts versehentlich offen ist):
 - `ip` — nur die Client-IPs aus `RELAY_ALLOW` dürfen `/p`.
-- `basic` — Benutzer/Passwort (`RELAY_USER` / `RELAY_PASS`).
+- `basic` — Benutzer/Passwort (`RELAY_USER` / `RELAY_PASS`). Der `install.sh` generiert das beim
+  ersten Lauf automatisch.
+- `open` — kein Schutz, **ausdrücklich** zu setzen. Nur im eigenen/vertrauten Netz.
+
+### `RELAY_ALLOW_UNPROTECTED`
+Nur für **lokale Entwicklung**. Standardmäßig blockt der Relay `/p`, solange **kein aktives
+VPN-Interface** vorhanden ist (Fail-Closed, siehe unten). Mit `RELAY_ALLOW_UNPROTECTED=1` wird dieser
+Wächter **abgeschaltet** und der Relay leitet auch **ohne VPN** weiter (der Verkehr läuft dann über
+die echte IP). **Niemals in Produktion setzen.**
 
 ### `RELAY_ALLOW`
 Nur bei `RELAY_AUTH=ip`. Kommagetrennte erlaubte Client-IPs, z. B. `1.2.3.4,5.6.7.8`. Nutzt die
@@ -177,7 +189,9 @@ alle Clients einen bekannten Origin, hier eng setzen.
 ### `RELAY_REAL_IP`
 Aktive Leak-Selbstprüfung: die **echte** (Nicht-VPN-)öffentliche IP deines Hosts. Stimmt die gemessene
 Egress-IP damit überein, wirkt der Tunnel **nicht** → `/health` meldet ehrlich `vpn:false` (statt nur
-dem Vorhandensein des Interfaces zu vertrauen). Erfordert `RELAY_EGRESS_LOOKUP` an.
+dem Vorhandensein des Interfaces zu vertrauen). Zugleich Voraussetzung für das starke
+`protected:true`-Attest in `/health` (nur bei gesetztem `RELAY_REAL_IP` und gemessenem Egress ≠ echter
+IP). Erfordert `RELAY_EGRESS_LOOKUP` an. `phantom-relay setup` fragt diese IP ab und trägt sie ein.
 
 ### Ressourcengrenzen (DoS-Härtung)
 Alle mit sinnvollen Standards; `0` schaltet die Concurrency-/Rate-Grenze ab.
@@ -193,11 +207,14 @@ Alle mit sinnvollen Standards; `0` schaltet die Concurrency-/Rate-Grenze ab.
 Fällt das VPN aus, darf der Relay **nichts** mehr weiterleiten – sonst ginge der Verkehr über die
 echte IP (Leak). Zwei Ebenen, **am besten beide** — die zweite ist der einzige *echte* Kill-Switch:
 
-1. **Im Relay (Interface-Wächter, kein echter Kill-Switch):** Ist `RELAY_VPN_IF` gesetzt und das
-   Interface verschwindet, gibt `/p` **HTTP 503** und `/health` meldet `vpn:false`. Das prüft nur, ob
-   das Tunnel-**Interface vorhanden** ist — **nicht**, ob der Verkehr wirklich hindurchgeht. Ehrliche
-   Zusatzprüfung: mit `RELAY_REAL_IP` (deine echte Nicht-VPN-IP) vergleicht der Relay die gemessene
-   Egress-IP; stimmt sie mit der echten überein, meldet er `vpn:false`, auch wenn das Interface „da" ist.
+1. **Im Relay (Interface-Wächter, kein echter Kill-Switch):** `/p` leitet **nur** weiter, solange ein
+   erwartetes VPN-Interface **vorhanden und aktiv** ist. Ist **kein aktives VPN-Interface** bekannt
+   (fehlt, verschwunden oder gar keins erkannt), gibt `/p` **HTTP 503** und `/health` meldet
+   `vpn:false` — der Relay leitet dann **gar nichts** weiter (hartes Fail-Closed). Ausnahme nur für
+   die lokale Entwicklung per `RELAY_ALLOW_UNPROTECTED=1`. Das prüft nur, ob das Tunnel-**Interface
+   vorhanden** ist — **nicht**, ob der Verkehr wirklich hindurchgeht. Ehrliche Zusatzprüfung: mit
+   `RELAY_REAL_IP` (deine echte Nicht-VPN-IP) vergleicht der Relay die gemessene Egress-IP; stimmt sie
+   mit der echten überein, meldet er `vpn:false`, auch wenn das Interface „da" ist.
 2. **Auf OS-Ebene (echter Kill-Switch, dringend empfohlen):** eine `nftables`/`iptables`-OUTPUT-Regel,
    die **jeglichen** Verkehr außer über `wg0` (und den Handshake zum VPN-Endpunkt) **verwirft**. Damit
    kann bei einem VPN-Ausfall physisch kein Paket über die echte Leitung entkommen — unabhängig vom
@@ -258,7 +275,7 @@ Liveness + Schutz-Status als JSON. **Anonym** wird nur ein minimales, nicht-iden
 Objekt geliefert:
 
 ```json
-{ "ok": true, "vpn": true }
+{ "ok": true, "vpn": true, "protected": true }
 ```
 
 Die **identifizierenden Detailfelder** (`iface`/`ip`/`clientIp`/`country`/`isp`) liefert der Relay
@@ -267,13 +284,17 @@ Die **identifizierenden Detailfelder** (`iface`/`ip`/`clientIp`/`country`/`isp`)
 `--check`). So verrät `/health` die Egress-IP/das Interface nicht mehr an beliebige Aufrufer:
 
 ```json
-{ "ok": true, "vpn": true, "iface": "wg0", "ip": "203.0.113.10", "clientIp": "…", "country": "Germany", "isp": "" }
+{ "ok": true, "vpn": true, "protected": true, "iface": "wg0", "ip": "203.0.113.10", "clientIp": "…", "country": "Germany", "isp": "" }
 ```
 
 - `vpn`: `true` = Tunnel-Interface **vorhanden** (bzw. Egress ≠ `RELAY_REAL_IP`), `false` = Interface
   **weg** oder Egress = echte IP (= ungeschützt), `null` = unbekannt (dann entscheidet die App per
   Egress-Vergleich). **Ehrlich gelesen:** `vpn:true` heißt „Interface da", nicht „Verkehr geht
   garantiert durch den Tunnel" — den echten Beweis liefert der Egress-Vergleich (oder `RELAY_REAL_IP`).
+- `protected`: **starkes Schutz-Attest.** Nur `true`, wenn (a) ein VPN-Interface aktiv ist **und**
+  (b) der Egress-Selbsttest besteht: `RELAY_REAL_IP` ist gesetzt **und** die gemessene Egress-IP ist
+  **ungleich** dieser echten IP. Ist `RELAY_REAL_IP` **nicht** gesetzt, bleibt `protected:false` —
+  der Relay behauptet keinen Schutz, den er nicht gemessen hat (die App bleibt dann bei Opt-out).
 - `ip`/`country`/`isp`: aktuelle **Egress-IP** des Relays (nur bei `RELAY_EGRESS_LOOKUP` an).
 - Die App pollt `/health` ohne Zugangsdaten und stützt sich auf `vpn` — die Egress-**Anzeige** in der
   Statuskarte erscheint bei `basic`/`ip` nur, wenn die App den Token bzw. eine erlaubte IP mitschickt.
