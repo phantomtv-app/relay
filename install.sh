@@ -16,13 +16,28 @@ set -euo pipefail
 APP_DIR="/opt/phantom-relay"
 ENV_FILE="/etc/phantom-relay.env"
 SERVICE="/etc/systemd/system/phantom-relay.service"
-RAW="https://raw.githubusercontent.com/phantomtv-app/relay/main"
+# Supply-chain: server.js is fetched from this git ref. 'main' is a MOVING branch - a force-push or a
+# compromised repo could silently change what you install. For a REPRODUCIBLE install, pin RELAY_REF to
+# an immutable ref before running:
+#   - a full commit SHA (strongest, always immutable): RELAY_REF=<40-char-sha> ./install.sh
+#   - a signed release tag once published:             RELAY_REF=v1.0.0        ./install.sh
+# Verify the download out-of-band, e.g. compare a known-good checksum:
+#   sha256sum /opt/phantom-relay/server.js   # then match it against the value from the release notes
+# Default stays 'main' (no tag is published yet); switch it to a signed tag as soon as one exists.
+RELAY_REF="${RELAY_REF:-main}"
+RAW="https://raw.githubusercontent.com/phantomtv-app/relay/${RELAY_REF}"
 SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo /tmp)"
 
 [ "$(id -u)" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
 echo "== phantom_ Relay – Installer =="
 
 # 1) Ensure Node 18+
+# Supply-chain note: the NodeSource bootstrap below is the vendor's official 'curl | bash' from
+# deb.nodesource.com (served over HTTPS, provenance = NodeSource). It ADDS an APT repo + its signing
+# key; subsequent 'apt-get install nodejs' packages are then GPG-verified by APT. If you prefer not to
+# run a piped script, install Node from your distro (apt-get install -y nodejs) or nodejs.org and skip
+# this block - the relay only needs Node 18+. To pin/audit it, fetch the script to a file first and
+# review/checksum it before running:  curl -fsSL https://deb.nodesource.com/setup_lts.x -o ns.sh
 if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 18 ]; then
   echo "-> Installing the latest Node.js LTS …"
   apt-get update -y
@@ -77,13 +92,16 @@ RELAY_VPN_IF=${RELAY_VPN_IF:-wg0}
 RELAY_AUTH=${RELAY_AUTH:-basic}
 RELAY_USER=${RELAY_USER:-phantom}
 RELAY_PASS=${RELAY_PASS:-$GEN_PASS}
-# Egress display is ON by default (uses your own /api/my-ip, not a third party):
-#   RELAY_EGRESS_LOOKUP=0   disables it (no extra outbound call at all)
+# Egress display is OFF by default (no periodic outbound call). OPT-IN to let the relay look up its
+# OWN exit IP through the tunnel via phantom_'s endpoint https://phantomtv.app/api/my-ip (no third
+# party, no user data) so the app can show the IP comparison and enable the extra RELAY_REAL_IP veto:
+#   RELAY_EGRESS_LOOKUP=1
 # Behind a reverse proxy set a fixed public base (else the Host header is used):
 #   RELAY_PUBLIC_URL=https://relay.example
 #   RELAY_TRUSTED_PROXIES=1.2.3.4     (only these proxy IPs may set X-Forwarded-*)
-# Active leak self-check + strong /health 'protected' attest (your real, non-VPN public IP;
-# 'phantom-relay setup' can fill this in for you):
+# The strong /health 'protected' attest does NOT need this - it rests on the tunnel-interface name +
+# a routing proof (ip route get). RELAY_REAL_IP only ADDS an egress leak veto (requires the egress
+# lookup above). 'phantom-relay setup' can fill it in for you:
 #   RELAY_REAL_IP=203.0.113.9
 # Local dev without a VPN (disables the fail-closed guard -> forwards UNPROTECTED, dev only):
 #   RELAY_ALLOW_UNPROTECTED=1
@@ -143,23 +161,126 @@ case "\$cmd" in
     sed -i '1s/^\xEF\xBB\xBF//; s/\r\$//' /etc/wireguard/wg0.conf 2>/dev/null || true
     chmod 600 /etc/wireguard/wg0.conf 2>/dev/null || true
     echo ""
-    echo "2) Optional but recommended: your REAL (non-VPN) public IP."
-    echo "   It enables an active leak self-check and the strong 'protected' status in /health."
-    echo "   Capture it NOW, BEFORE the VPN starts, e.g.:  curl https://phantomtv.app/api/my-ip"
-    echo "   (or open any 'what is my IP' page). Leave empty to skip."
-    read -rp "   Real non-VPN public IP: " _realip
+    echo "2) OPTIONAL egress leak veto: detecting your REAL (non-VPN) public IP ..."
+    echo "   The 'protected' attest already works via the routing proof (ip route). This step ADDS an"
+    echo "   extra check: it enables the egress lookup (a periodic call THROUGH the tunnel to phantom_'s"
+    echo "   https://phantomtv.app/api/my-ip - no third party, no user data) and flags a leak if the exit"
+    echo "   IP ever equals your real one. Detected NOW, before the VPN starts. Leave empty to skip."
+    _realip="\$(curl -fsSL --max-time 8 https://phantomtv.app/api/my-ip 2>/dev/null | grep -oE '([0-9]{1,3}\\.){3}[0-9]{1,3}' | head -1)"
     if [ -n "\$_realip" ]; then
-      sed -i '/^RELAY_REAL_IP=/d' "$ENV_FILE" 2>/dev/null || true
+      read -rp "   Detected \$_realip - press Enter to use it, type a different IP, or 'n' to skip: " _override
+      [ "\$_override" = "n" ] && _realip=""
+      [ -n "\$_override" ] && [ "\$_override" != "n" ] && _realip="\$_override"
+    else
+      read -rp "   Could not auto-detect. Enter your real non-VPN public IP (empty = skip): " _realip
+    fi
+    if [ -n "\$_realip" ]; then
+      sed -i '/^RELAY_REAL_IP=/d; /^RELAY_EGRESS_LOOKUP=/d' "$ENV_FILE" 2>/dev/null || true
       echo "RELAY_REAL_IP=\$_realip" >> "$ENV_FILE"
-      echo "   -> saved RELAY_REAL_IP to $ENV_FILE"
+      # The RELAY_REAL_IP veto needs the egress lookup; enable it here as the explicit opt-in.
+      echo "RELAY_EGRESS_LOOKUP=1" >> "$ENV_FILE"
+      echo "   -> saved RELAY_REAL_IP=\$_realip + RELAY_EGRESS_LOOKUP=1 to $ENV_FILE"
     fi
     echo "3) Starting the VPN (wg-quick@wg0) ..."
     if systemctl enable --now wg-quick@wg0; then
       wg show
       echo ""
-      echo "4) Restarting the relay so it picks up the tunnel ..."
+      echo "4) RECOMMENDED kill switch (nftables OUTPUT-deny) ..."
+      echo "   Drops ALL outbound traffic except via the tunnel (wg0) + the WireGuard handshake, so"
+      echo "   nothing can leak over the real link if the VPN ever drops (a REAL kill switch)."
+      echo "   Why recommended: WITHOUT it the app-side guard is only a best-effort route check with a"
+      echo "   TOCTOU residual window (it verifies the interface/route, not every packet, and not at the"
+      echo "   instant a packet leaves). nftables (packet-level, or a network namespace) is the ONLY hard"
+      echo "   guarantee that nothing but loopback and wg0 ever gets egress. Enable it unless you have a"
+      echo "   specific reason not to."
+      echo "   WARNING: a wrong VPN port can lock this box out of the network (SSH included)."
+      echo "            Proceed ONLY with console access to recover. Default is YES (recommended)."
+      read -rp "   Install the nftables kill switch now? [Y/n] " _ks
+      if [ -z "\$_ks" ] || [ "\$_ks" = "y" ] || [ "\$_ks" = "Y" ]; then
+        # WireGuard ENDPOINT (host:port) from wg0.conf. A real kill switch must permit ONLY the handshake
+        # to THIS endpoint over the real uplink - not any UDP to that port, and NOT arbitrary pre-existing
+        # (non-VPN) connections. So resolve the endpoint host to its IP(s) and pin the exception to
+        # <egress-if> + endpoint-IP + UDP-port, per address family (ip/ip6). NOTE: the most robust reference
+        # variant is a VPN-only network namespace (the relay would get NO route to the real uplink at all);
+        # consider it for high-assurance setups. This nftables switch is the pragmatic single-host approximation.
+        _ep="\$(grep -iE '^[[:space:]]*Endpoint' /etc/wireguard/wg0.conf 2>/dev/null | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]].*\$//')"
+        _wgport="\$(printf '%s' "\$_ep" | sed -E 's/.*:([0-9]+)\$/\1/')"
+        _ephost="\$(printf '%s' "\$_ep" | sed -E 's/:[0-9]+\$//; s/^\[//; s/\]\$//')"
+        case "\$_wgport" in ''|*[!0-9]*) _wgport=51820 ;; esac
+        # Resolve endpoint host -> IP(s). getent handles literals and names; dig is a fallback. If it stays
+        # unresolvable, WARN and fall back to a looser port-only exception (so we never lock out the handshake).
+        _epips=""
+        if [ -n "\$_ephost" ]; then
+          _epips="\$(getent ahosts "\$_ephost" 2>/dev/null | awk '{print \$1}' | sort -u)"
+          [ -n "\$_epips" ] || _epips="\$(dig +short "\$_ephost" 2>/dev/null | grep -E '^[0-9A-Fa-f:.]+\$')"
+        fi
+        _epfallback=0
+        [ -n "\$_epips" ] || { _epfallback=1; echo "   WARNING: endpoint '\$_ephost' did not resolve to an IP - using a looser PORT-ONLY handshake exception. Pin the endpoint IP by hand for a tighter rule."; }
+        command -v nft >/dev/null 2>&1 || apt-get install -y nftables >/dev/null 2>&1 || true
+        if ! command -v nft >/dev/null 2>&1; then
+          echo "   nft not available - skipping the kill switch."
+        elif ! command -v curl >/dev/null 2>&1; then
+          echo "   curl not available for the post-apply safety test - skipping the kill switch."
+        else
+          # Back up the current ruleset so a failed connectivity test can be rolled back cleanly.
+          _ksbak="/root/phantom-killswitch-backup-\$(date +%s).nft"
+          nft list ruleset > "\$_ksbak" 2>/dev/null || true
+          mkdir -p /etc/nftables.d
+          _ksfile="/etc/nftables.d/phantom-killswitch.nft"
+          # Static head: only lo + the tunnel (wg0) may egress unconditionally.
+          cat > "\$_ksfile" <<KSEOF
+table inet phantom_killswitch {
+  chain output {
+    type filter hook output priority 0; policy drop;
+    oifname "lo" accept
+    oifname "wg0" accept
+KSEOF
+          # Endpoint handshake exception(s): egress-if + endpoint-IP + UDP-port, per family. established,related
+          # is bound to the SAME endpoint IP so no pre-existing NON-VPN connection survives the switch.
+          if [ "\$_epfallback" = "1" ]; then
+            printf '    udp dport %s accept\n    ct state established,related accept\n' "\$_wgport" >> "\$_ksfile"
+          else
+            for _ip in \$_epips; do
+              case "\$_ip" in
+                *:*) _fam="ip6"; _if="\$(ip -6 route get "\$_ip" 2>/dev/null | sed -nE 's/.* dev ([^ ]+).*/\1/p' | head -1)" ;;
+                *)   _fam="ip";  _if="\$(ip route get "\$_ip" 2>/dev/null | sed -nE 's/.* dev ([^ ]+).*/\1/p' | head -1)" ;;
+              esac
+              [ -n "\$_if" ] || _if="\$(ip route show default 2>/dev/null | sed -nE 's/.* dev ([^ ]+).*/\1/p' | head -1)"
+              if [ -n "\$_if" ]; then
+                printf '    oifname "%s" %s daddr %s udp dport %s accept\n' "\$_if" "\$_fam" "\$_ip" "\$_wgport" >> "\$_ksfile"
+                printf '    oifname "%s" %s daddr %s ct state established,related accept\n' "\$_if" "\$_fam" "\$_ip" >> "\$_ksfile"
+              else
+                printf '    %s daddr %s udp dport %s accept\n' "\$_fam" "\$_ip" "\$_wgport" >> "\$_ksfile"
+              fi
+            done
+          fi
+          printf '  }\n}\n' >> "\$_ksfile"
+          if nft -f "\$_ksfile"; then
+            # Safety test: traffic must still flow THROUGH the tunnel. If not, the rules are wrong ->
+            # roll back immediately so we never leave the box cut off from the network.
+            if curl -fsS --max-time 8 https://phantomtv.app/api/my-ip >/dev/null 2>&1; then
+              echo "   Kill switch active (handshake udp/\$_wgport). Tunnel connectivity OK."
+              grep -qsF "\$_ksfile" /etc/nftables.conf 2>/dev/null || printf 'include "%s"\n' "\$_ksfile" >> /etc/nftables.conf
+              systemctl enable nftables >/dev/null 2>&1 || true
+              echo "   Persisted (included from /etc/nftables.conf; nftables service enabled)."
+            else
+              echo "   Connectivity test FAILED after applying the kill switch - rolling back."
+              nft delete table inet phantom_killswitch 2>/dev/null || true
+              rm -f "\$_ksfile"
+              echo "   Removed. Previous ruleset backup: \$_ksbak"
+            fi
+          else
+            echo "   Could not apply the kill switch (nft -f failed) - skipping."
+            rm -f "\$_ksfile"
+          fi
+        fi
+      else
+        echo "   Skipped. You can add a kill switch later (see README 'Kill switch')."
+      fi
+      echo ""
+      echo "5) Restarting the relay so it picks up the tunnel ..."
       systemctl restart phantom-relay
-      echo "5) Verifying ..."
+      echo "6) Verifying ..."
       exec $NODE_BIN "$APP_DIR/server.js" --check
     else
       echo ""
@@ -207,17 +328,23 @@ echo "Config:     $ENV_FILE   (then: systemctl restart phantom-relay)"
 echo "In the app: http://<this-server>:${PORT_EFF:-8787}"
 echo ""
 echo "== Real kill switch (STRONGLY recommended) =="
-echo "The relay's fail-closed only checks that the tunnel INTERFACE exists - it is NOT a true kill"
-echo "switch. Add an OS-level OUTPUT-deny so no packet can leave except via the tunnel (wg0). Example"
-echo "(nftables; replace 51820 with your VPN provider's UDP port):"
+echo "The relay's fail-closed verifies the tunnel interface is up AND proves per target that the route"
+echo "leaves via it ('ip route get <target>' -> dev must be the tunnel) - but it is still NOT a true kill"
+echo "switch: it governs only the relay's own HTTP sockets, not DNS or any other process, and cannot"
+echo "physically stop a packet. Add an OS-level OUTPUT-deny so no packet can leave except via the tunnel"
+echo "(wg0). 'phantom-relay setup' can generate a HARDENED variant for you (handshake pinned to the"
+echo "resolved endpoint IP + egress interface, established/related scoped to that endpoint - NOT pauschal)."
+echo "The strongest reference is a VPN-only network namespace (no route to the real uplink at all)."
+echo "Minimal manual example (nftables; replace <endpoint-ip>/<uplink-if>/51820 with your values):"
 cat <<'NFT'
   table inet killswitch {
     chain output {
       type filter hook output priority 0; policy drop;
       oifname "lo" accept
       oifname "wg0" accept
-      udp dport 51820 accept          # WireGuard handshake to your VPN endpoint
-      ct state established,related accept
+      # ONLY the handshake to your endpoint over the real uplink - not any UDP to that port:
+      oifname "<uplink-if>" ip daddr <endpoint-ip> udp dport 51820 accept
+      oifname "<uplink-if>" ip daddr <endpoint-ip> ct state established,related accept
     }
   }
 NFT

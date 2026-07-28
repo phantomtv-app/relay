@@ -24,7 +24,21 @@ env:
   DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
 
 jobs:
+  # Gate: the image is only built/pushed when tests AND typecheck pass. A failing test
+  # here blocks the publish below (build-push needs: verify).
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+
   build-push:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -6,6 +6,7 @@
 	"scripts": {
 		"start": "node server.js",
 		"check": "node server.js --check",
+		"test": "node tests/run.mjs",
 		"typecheck": "tsc --noEmit"
 	},
 	"engines": {

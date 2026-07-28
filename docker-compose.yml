@@ -8,7 +8,12 @@
 
 services:
   relay:
-    image: ghcr.io/phantomtv-app/relay:latest   # or: docker.io/phantomtvapp/relay:latest
+    # Pinned to a fixed release tag (supply-chain: avoid the moving ':latest', which could pull an
+    # unexpected image on the next 'docker compose up'). Bump this to a newer tag deliberately.
+    # MOST reproducible: pin by DIGEST instead of a tag (a tag can be re-pushed, a digest cannot). Get it
+    # with 'docker buildx imagetools inspect ghcr.io/phantomtv-app/relay:1.0.0' and reference it as:
+    #   image: ghcr.io/phantomtv-app/relay:1.0.0@sha256:REPLACE_WITH_REAL_DIGEST
+    image: ghcr.io/phantomtv-app/relay:1.0.0   # or: docker.io/phantomtvapp/relay:1.0.0
     container_name: phantom-relay
     cap_add:
       - NET_ADMIN                     # for WireGuard in the container
@@ -36,8 +41,9 @@ services:
       #   - RELAY_AUTH=open
       # Local dev without a VPN (disables the fail-closed guard -> forwards UNPROTECTED, dev only):
       #   - RELAY_ALLOW_UNPROTECTED=1
-      # Egress lookup is ON by default (uses your own /api/my-ip, not a third party); opt out with:
-      #   - RELAY_EGRESS_LOOKUP=0
+      # Egress lookup is OFF by default (no outbound call). Opt in to show the relay's own exit IP in
+      # /health (uses your own /api/my-ip, not a third party) and enable the RELAY_REAL_IP leak veto:
+      #   - RELAY_EGRESS_LOOKUP=1
       # Behind a reverse proxy, set the fixed public base (else the Host header is used):
       #   - RELAY_PUBLIC_URL=https://relay.example
       #   - RELAY_TRUSTED_PROXIES=  # comma list of proxy IPs allowed to set X-Forwarded-*

@@ -1,7 +1,9 @@
-# Type-checks server.js via // @ts-check + JSDoc (tsc --noEmit). No build artifact is produced;
-# the shipped file stays plain JS with zero runtime dependencies.
+# Runs the integration tests (node tests/run.mjs) and type-checks server.js via
+# // @ts-check + JSDoc (tsc --noEmit). No build artifact is produced; the shipped file
+# stays plain JS with zero runtime dependencies. This is the PR gate; the Docker workflow
+# has its own verify job that blocks publishing when tests or the typecheck fail.
 
-name: Typecheck
+name: Verify
 
 on:
   push:
@@ -11,12 +13,13 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  typecheck:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install
+      - run: npm ci
+      - run: npm test
       - run: npm run typecheck

@@ -57,8 +57,11 @@ docker run -d --name phantom-relay \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -v "$PWD/wg0.conf:/etc/wireguard/wg0.conf:ro" \
   -e RELAY_VPN_IF=wg0 -p 8787:8787 \
-  --restart unless-stopped ghcr.io/phantomtv-app/relay:latest
+  --restart unless-stopped ghcr.io/phantomtv-app/relay:1.0.0
 ```
+
+The image tag is pinned to a fixed release (`:1.0.0`) rather than the moving `:latest`, so a rebuild
+can't pull an unexpected image. Bump it deliberately when you want a newer version.
 
 Prefer compose? Grab just the file – still no clone:
 ```bash
@@ -86,7 +89,8 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/phantomtv-app/relay/mai
 sudo bash -c "$(wget -qLO - https://raw.githubusercontent.com/phantomtv-app/relay/main/install.sh)"
 ```
 Installs Node (if needed), the relay to `/opt/phantom-relay` and a `phantom-relay` systemd service.
-Config in `/etc/phantom-relay.env`.
+Config in `/etc/phantom-relay.env`. For a reproducible install, pin the source to a release tag with
+`RELAY_REF` (e.g. `sudo RELAY_REF=v1.0.0 bash -c "$(wget -qLO - …/install.sh)"`); it defaults to `main`.
 
 ---
 
@@ -105,6 +109,11 @@ first run `install.sh` automatically sets up `basic` with a **strong random pass
 
 `/health` stays open (liveness/status only, no content).
 
+**Behind a reverse proxy, prefer `basic` (token) over `ip`.** The `ip` allowlist matches the real TCP
+peer address (`X-Forwarded-For` is never trusted); behind a proxy that peer is the *proxy's* IP, so
+allowlisting it would authorize **every** client behind that proxy. Token auth (`basic`) is not affected.
+The relay warns at startup if `RELAY_AUTH=ip` is combined with `RELAY_TRUSTED_PROXIES`.
+
 ---
 
 ## Privacy – no logging
@@ -113,11 +122,12 @@ The relay writes **nothing** about your traffic: **no** access logs, **no** requ
 client IPs, **no** stream data – not to files, not to a database. The only console output is **one**
 startup banner (port + auth mode, no user data).
 
-The **only** extra outbound call is the egress lookup: the relay looks up its **own** exit IP via
-**your own endpoint** (`RELAY_EGRESS_URL`, default `https://phantomtv.app/api/my-ip` — no third party)
-for the `/health` display (reveals only the relay's VPN IP, no user data). This lookup is **on by
-default** (so the app can show the IP comparison); turn it off with `RELAY_EGRESS_LOOKUP=0` — then the
-relay makes **no** extra outbound calls at all.
+The **only** possible extra outbound call is the egress lookup, and it is **off by default**: nothing
+leaves the relay unless you opt in. When enabled (`RELAY_EGRESS_LOOKUP=1`) the relay looks up its
+**own** exit IP **through the tunnel** via **phantom_'s endpoint** (`RELAY_EGRESS_URL`, default
+`https://phantomtv.app/api/my-ip` — phantom_'s own infrastructure, no third party) for the `/health`
+display (reveals only the relay's VPN IP, no user data). Left off (the default), the relay makes
+**no** extra outbound calls at all — the `protected` attest works without it (via the routing proof).
 
 ---
 
@@ -133,9 +143,9 @@ Default `8787`. TCP port the relay listens on. The address you enter in the app 
 ### `RELAY_VPN_IF`
 Name of the VPN network interface the relay watches for the fail-closed check (e.g. `wg0`, `tun0`).
 **Recommended to set explicitly.** If unset, a common interface is auto-detected at start and
-pinned; if it later disappears the VPN counts as down. If NO interface can be determined,
-fail-closed is inactive (the relay warns at startup) and protection relies on the app's egress
-comparison — so set this.
+pinned; if it later disappears the VPN counts as down. If NO interface can be determined, the strong
+`protected` attest can never pass, so `/p` is blocked entirely (fail-closed) — set this to a real
+tunnel.
 
 ### `RELAY_AUTH`
 Access control mode. **No default** — if unset (or invalid) the relay blocks `/p` entirely
@@ -162,15 +172,17 @@ this automatically. With `basic` but no credentials set, **all** `/p` requests a
 (fail-closed, so a misconfiguration never accidentally opens the relay).
 
 ### `RELAY_EGRESS_LOOKUP`
-**Default `1` (on).** The relay looks up its **own** exit IP via your own endpoint (see
-`RELAY_EGRESS_URL`) and shows it in `/health` (reveals only the VPN IP, no user data, no third party)
-so the app can reliably show the IP comparison. Opt out with `RELAY_EGRESS_LOOKUP=0` — then the relay
-makes no extra outbound call and the app verifies protection itself via egress comparison.
+**Default `0` (off — opt-in).** With `RELAY_EGRESS_LOOKUP=1` the relay looks up its **own** exit IP
+through the tunnel via phantom_'s endpoint (see `RELAY_EGRESS_URL`) and shows it in `/health` (reveals
+only the VPN IP, no user data) so the app can show the IP comparison and the `RELAY_REAL_IP` leak veto
+becomes possible. Left off (the default) the relay makes **no** extra outbound call; the `protected`
+attest does not need it — it rests on the tunnel-interface name plus the routing proof.
 
 ### `RELAY_EGRESS_URL`
-Only relevant while `RELAY_EGRESS_LOOKUP` is on. The "what is my IP" endpoint the relay queries
-**through the tunnel** to learn its exit IP. Default `https://phantomtv.app/api/my-ip` (own
-infrastructure, no third party); expected response `{"ip":"…","country":"XX"}`. Override for a different deployment.
+Only relevant while `RELAY_EGRESS_LOOKUP` is on (opt-in). The "what is my IP" endpoint the relay
+queries **through the tunnel** to learn its exit IP. Default `https://phantomtv.app/api/my-ip`
+(phantom_'s own infrastructure, no third party); expected response `{"ip":"…","country":"XX"}`.
+Override for a different deployment.
 
 ### `RELAY_PUBLIC_URL`
 Fixed public base URL for HLS rewriting, e.g. `https://relay.example`. **Set this behind a reverse
@@ -186,11 +198,11 @@ rewriting. Empty (default) = trust **no** forwarded header. Only needed without 
 all your clients share a known origin.
 
 ### `RELAY_REAL_IP`
-Active leak self-check: your host's **real** (non-VPN) public IP. If the measured egress equals it, the
-tunnel is **not** effective → `/health` honestly reports `vpn:false` (instead of trusting the interface
-presence). It is also the prerequisite for the strong `protected:true` attest in `/health` (only with
-`RELAY_REAL_IP` set and the measured egress ≠ the real IP). Requires `RELAY_EGRESS_LOOKUP` on.
-`phantom-relay setup` asks for this IP and writes it for you.
+**Optional** extra leak veto: your host's **real** (non-VPN) public IP. If the measured egress equals
+it, the tunnel is **not** effective → `/health` honestly reports `vpn:false`. This only **adds** a
+check on top of the routing-proof attest (it is **not** required for `protected:true`) and only has an
+effect with `RELAY_EGRESS_LOOKUP=1`. `phantom-relay setup` offers to detect this IP (and enables the
+egress lookup) for you.
 
 ### Resource limits (DoS hardening)
 All have sensible defaults; `0` disables the concurrency/rate caps.
@@ -206,14 +218,15 @@ All have sensible defaults; `0` disables the concurrency/rate caps.
 If the VPN drops, the relay must forward **nothing** – otherwise traffic would leave via the real
 IP (a leak). Two layers, **best use both** — the second is the only *real* kill switch:
 
-1. **In the relay (interface guard, not a real kill switch):** `/p` forwards **only** while an
-   expected VPN interface is **present and up**. If **no active VPN interface** is known (missing,
-   gone, or none detected at all), `/p` returns **HTTP 503** and `/health` reports `vpn:false` — the
-   relay forwards **nothing** (hard fail-closed). The only exception is local development via
-   `RELAY_ALLOW_UNPROTECTED=1`. This only checks that the tunnel **interface is present** — **not**
-   that traffic actually goes through it. Honest extra check: with `RELAY_REAL_IP` (your real non-VPN
-   IP) the relay compares the measured egress; if it equals the real IP it reports `vpn:false` even
-   when the interface is "up".
+1. **In the relay (attest guard):** `/p` forwards **only** while the strong `protected` attest holds:
+   (a) the expected interface is up **and** its name is a real tunnel (`wg*`/`tun*`/`vpn*`/`wireguard`,
+   never `eth0`/`wlan0`), **and** (b) a **routing proof** — the kernel route to a public target
+   (`ip route get 1.1.1.1`) provably leaves via that tunnel. If the `ip` tool is missing or the route
+   uses another device, the attest **fails**. Whenever the attest does **not** hold, `/p` returns
+   **HTTP 503** and `/health` reports `protected:false` — the relay forwards **nothing** (hard
+   fail-closed). The only exception is local development via `RELAY_ALLOW_UNPROTECTED=1`. Optional extra
+   veto: with `RELAY_REAL_IP` + `RELAY_EGRESS_LOOKUP=1` the relay also compares the measured egress; if
+   it equals the real IP it reports a leak even when the interface is "up".
 2. **At OS level (real kill switch, strongly recommended):** an `nftables`/`iptables` OUTPUT rule that
    **drops** any traffic except via `wg0` (and the handshake to the VPN endpoint). Then no packet can
    escape over the real link on a VPN failure, independent of the relay process.
@@ -234,22 +247,34 @@ IP (a leak). Two layers, **best use both** — the second is the only *real* kil
    ```
    Alternatively run the relay in a dedicated **network namespace** that contains ONLY `wg0` (no
    default interface) — then there is no non-VPN egress at all. The standalone `install.sh` also prints
-   this recommendation at the end.
+   this recommendation at the end (and `phantom-relay setup` offers to install the nftables rules for you).
+
+> **Scope — what the relay's own check does *not* cover:** the routing proof only proves the **HTTP
+> socket's** egress route to the target IP. It does **not** police **DNS** — the relay resolves
+> hostnames via the OS resolver, and those DNS queries can still leave via your ISP's resolver, outside
+> the tunnel. So `protected:true` means "the HTTP egress route is the tunnel", **not** "every packet
+> (incl. DNS) is tunnelled". Complete protection — DNS included — comes only from the OS-level kill
+> switch or the network namespace above.
 
 ---
 
 ## In the app & checking
 
-**Settings → Relay**: enter the address (`http://<server>:8787`), save, **"Check relay"**. Green
-"Protected" only shows when the exit IP differs from your direct IP – trust by **measurement**.
+**Settings → Relay**: enter the address (`http://<server>:8787`), save, **"Check relay"**. The app
+authenticates to `/health` and shows **"Protected"** only when the relay's strong `protected` attest
+holds (real tunnel interface **plus** routing proof) — the relay measures this itself; the app does
+**not** compare IPs client-side.
 
 One command instead of curl juggling:
 ```bash
 phantom-relay --check                                # standalone / Proxmox LXC install
 docker exec phantom-relay node server.js --check     # Docker
-# -> Relay: running · Protection: PROTECTED (VPN active) · Egress: 203.0.113.10 (Germany, …)
+# -> Relay: running · Protection: PROTECTED (tunnel + routing proof)
 ```
-Exit code: `0` ok/protected · `1` VPN down · `2` unreachable. (The Docker HEALTHCHECK uses it too.)
+Exit code: `0` **only** when the strong attest passes (`protected:true`) · `1` interface up but
+protection not verified / VPN down · `2` unreachable. The Docker HEALTHCHECK instead uses
+`node server.js --liveness` (process reachable? exit `0`/`1`) so a container isn't flagged unhealthy
+merely because no tunnel is up yet — the real protection is enforced per request, not by that light.
 
 ---
 
@@ -264,8 +289,9 @@ Fetches `target` server-side (through the relay's IP/VPN) and streams the respon
 - Pass the `Range` header through (seeking).
 - Rewrite HLS playlists (`.m3u8`) so segment/key URLs go **through `/p` again** (otherwise HLS
   streams escape past the VPN). Not needed for plain `.ts`/`mp4`.
-- Status codes: missing `u` → `400`, upstream error → `502`, VPN down → `503`,
-  unauthorized → `401` (basic) / `403` (ip), blocked target → `403`.
+- Status codes: missing `u` → `400`, upstream error → `502`, protection not verified → `503`
+  (fail-closed: no tunnel interface or no routing proof), unauthorized → `401` (basic) / `403` (ip),
+  blocked target → `403`.
 
 ### `GET /health`
 Liveness + protection status as JSON. **Anonymous** callers get only a minimal, non-identifying object:
@@ -284,20 +310,23 @@ no longer leaks the egress IP / interface to arbitrary callers:
 ```
 
 - `vpn`: `true` = tunnel interface **present** (or egress ≠ `RELAY_REAL_IP`), `false` = interface
-  **gone** or egress equals the real IP (= unprotected), `null` = unknown (the app then decides via
-  egress comparison). **Read honestly:** `vpn:true` means "interface present", not "traffic is
-  guaranteed to go through the tunnel" — the real proof is the egress comparison (or `RELAY_REAL_IP`).
-- `protected`: **strong protection attest.** `true` only when (a) a VPN interface is active **and**
-  (b) the egress self-test passes: `RELAY_REAL_IP` is set **and** the measured egress IP **differs**
-  from that real IP. Without `RELAY_REAL_IP`, `protected` stays `false` — the relay never claims
-  protection it has not measured (the app then stays opt-out).
+  **gone** or egress equals the real IP (= unprotected), `null` = unknown. **Read honestly:** `vpn:true`
+  means "interface present", not "traffic goes through the tunnel" — that proof lives in `protected`.
+- `protected`: **strong protection attest** and the exact gate `/p` enforces. `true` only when **all**
+  hold: (a) the expected interface is up **and** its name is a real tunnel (`wg*`/`tun*`/`vpn*`/
+  `wireguard`, never `eth0`/`wlan0`); (b) the **routing proof** passes — `ip route get 1.1.1.1` shows
+  the route leaving via that tunnel (missing `ip` or a different device → `false`, fail-closed); and
+  (c) the optional egress veto does not trip (with `RELAY_REAL_IP` + `RELAY_EGRESS_LOOKUP=1`, the
+  measured egress must differ from the real IP). It needs **no** `RELAY_REAL_IP` — the routing proof
+  alone carries it.
 - `ip`/`country`/`isp`: the relay's current **exit IP** (only present with `RELAY_EGRESS_LOOKUP` on).
-- The app polls `/health` without credentials and relies on `vpn`; the egress **display** in the status
-  card appears in `basic`/`ip` mode only if the app sends the token / uses an allowlisted IP.
+- The app queries `/health` (sending the `basic` token when configured) and relies on the `protected`
+  attest; the egress **display** (exit IP) only appears when `RELAY_EGRESS_LOOKUP` is on and the caller
+  is authorized.
 
 **Compatibility:** a generic proxy that only speaks `/p` and returns e.g. `404` on `/health` still
-works — phantom_ treats **any HTTP response as "reachable"** and determines protection via the
-egress comparison (your direct IP vs. the IP through the relay).
+works — phantom_ treats **any HTTP response as "reachable"**; without a `protected` attest it simply
+can't light up the strong protection badge.
 
 ## FAQ
 
@@ -327,8 +356,9 @@ this automatically (including the auth token in `basic` mode).
 - **DoS hardening:** a global concurrency cap + per-client rate limit, playlist size capped **while
   reading**, idle/connect timeouts, and a client disconnect aborts the upstream immediately
   (`RELAY_MAX_CONCURRENT`, `RELAY_RATE_*`, `RELAY_IDLE_TIMEOUT_MS`, `RELAY_MAX_STREAM_MS`).
-- **Access:** without `RELAY_AUTH` there is no access control – run it only on your own network.
-  Internet-facing → set **`RELAY_AUTH=ip` or `basic`** and put **TLS** in front (a reverse proxy),
+- **Access:** the default is **deny** — without a valid `RELAY_AUTH` (`ip`/`basic`/`open`), `/p` is
+  blocked entirely (fail-closed); `install.sh` sets up `basic` with a strong random password on first
+  run. Internet-facing → use **`RELAY_AUTH=ip` or `basic`** and put **TLS** in front (a reverse proxy),
   since credentials/`?k` otherwise travel in clear text.
 - Your WireGuard `.conf` (private key) must **never** be committed – it is excluded via `.gitignore`.
 
