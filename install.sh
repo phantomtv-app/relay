@@ -90,8 +90,12 @@ RELAY_VPN_IF=${RELAY_VPN_IF:-wg0}
 #   RELAY_AUTH=ip     + RELAY_ALLOW=1.2.3.4,5.6.7.8   (allowed client IPs)
 #   RELAY_AUTH=open   (no protection - ONLY on a trusted LAN)
 RELAY_AUTH=${RELAY_AUTH:-basic}
-RELAY_USER=${RELAY_USER:-phantom}
-RELAY_PASS=${RELAY_PASS:-$GEN_PASS}
+# User/Passwort EINFACH-GEQUOTET, damit systemd sie LITERAL nimmt. Unquoted würde der EnvironmentFile-
+# Parser Sonderzeichen verstümmeln (Backslash schlucken, äußere Anführungszeichen entfernen, bei einem
+# Backslash am Zeilenende die nächste Zeile anhängen) -> stilles 401 trotz „korrektem" Passwort. Ein
+# wörtliches ' im Passwort vermeiden (bricht das Quoting); am besten 'openssl rand -hex 24' o. alphanumerisch.
+RELAY_USER='${RELAY_USER:-phantom}'
+RELAY_PASS='${RELAY_PASS:-$GEN_PASS}'
 # Egress display is OFF by default (no periodic outbound call). OPT-IN to let the relay look up its
 # OWN exit IP through the tunnel via phantom_'s endpoint https://phantomtv.app/api/my-ip (no third
 # party, no user data) so the app can show the IP comparison and enable the extra RELAY_REAL_IP veto:

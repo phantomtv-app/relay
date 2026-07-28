@@ -142,7 +142,10 @@ kombiniert ist.
 
 Der Relay schreibt **nichts** über den Verkehr mit: **keine** Zugriffslogs, **keine** URLs,
 **keine** Client-IPs, **keine** Stream-Daten – weder in Dateien noch in eine Datenbank. Einzige
-Ausgabe ist **ein** Start-Banner (Port + Auth-Modus, keine Nutzerdaten).
+Ausgabe ist Start-**Status**: eine Banner-Zeile (Port, VPN-Interface, `protected`/`fail-closed`-Zustand,
+Auth-Modus, Limits) sowie – wo relevant – Konfigurationswarnungen (z. B. schwaches/fehlendes Passwort,
+VPN nicht verifiziert, `RELAY_AUTH=ip`-Caveats). Nichts davon enthält Nutzerdaten oder Verkehr — lesbar
+per `journalctl -u phantom-relay` (systemd) bzw. `docker logs phantom-relay`.
 
 Der **einzige** mögliche zusätzliche ausgehende Aufruf ist der Egress-Lookup, und er ist
 **standardmäßig aus**: ohne dein Opt-in verlässt nichts den Relay. Aktiviert (`RELAY_EGRESS_LOOKUP=1`)
@@ -231,6 +234,29 @@ Nur bei `RELAY_AUTH=basic`. Benutzername und Passwort. Akzeptiert per `Authoriza
 hängt das automatisch an. Bei `basic` OHNE hinterlegte Zugangsdaten werden **alle** `/p`-Anfragen
 blockiert (Fail-Closed, damit eine Fehlkonfiguration nie versehentlich öffnet).
 
+**Passwort setzen / ändern.** Der `install.sh` erzeugt beim ersten Lauf ein starkes Zufallspasswort —
+normalerweise musst du hier also nichts anfassen. Zum selbst Setzen/Rotieren zuerst ein echtes Geheimnis
+erzeugen (nicht von Hand ausdenken):
+```bash
+openssl rand -hex 24
+```
+Dann je nach Betriebsart anwenden:
+- **systemd (install.sh):** Env-Datei bearbeiten und neu starten —
+  ```bash
+  sudo nano /etc/phantom-relay.env      # RELAY_USER=… und RELAY_PASS=… setzen
+  sudo systemctl restart phantom-relay  # oder: phantom-relay restart
+  ```
+- **Docker:** `RELAY_USER`/`RELAY_PASS` unter `environment:` in der `docker-compose.yml` setzen, dann
+  mit `docker compose up -d` anwenden.
+
+> ⚠️ **Schwache Passwörter werden abgelehnt (Fail-Closed).** Bekannte Platzhalter — `change-me`,
+> `changeme`, `change-me-please`, `password`, `passwort`, `admin`, `phantom`, `secret`, `geheim`,
+> `test`, `1234`, `changeme123` — werden verweigert: bei `basic`-Auth mit einem solchen Wert (oder
+> keinem) wird **jede** `/p`-Anfrage blockiert und der Relay loggt `RELAY_PASS ist ein bekannter
+> Platzhalter/leer -> Basic-Auth fail-closed`. Das ist Absicht, damit ein kopiertes Beispiel nie mit
+> öffentlich bekannten Zugangsdaten online geht. **Docker erzeugt KEIN Passwort automatisch** (nur der
+> `install.sh` tut das) — du musst selbst ein echtes setzen, sonst liefert `/p` nichts aus.
+
 ### `RELAY_EGRESS_LOOKUP`
 **Standard `0` (aus — Opt-in).** Mit `RELAY_EGRESS_LOOKUP=1` fragt der Relay seine **eigene** Egress-IP
 durch den Tunnel über phantom_'s Endpunkt (siehe `RELAY_EGRESS_URL`) ab und zeigt sie in `/health` (nur
@@ -257,6 +283,11 @@ berücksichtigt. Leer (Standard) = **keinem** Forwarded-Header trauen. Nur nöti
 `Access-Control-Allow-Origin` der Antworten. Standard `*` (die App läuft unter `file://`). Teilen sich
 alle Clients einen bekannten Origin, hier eng setzen.
 
+> Mit **`RELAY_AUTH=ip` und `RELAY_CORS_ORIGIN=*`** kann **jeder** Browser-Origin auf einem
+> freigeschalteten Gerät den Relay für **beliebige öffentliche** Ziele nutzen — eine IP-Freigabe ist
+> **keine** Origin-/App-Authentifizierung. Der Relay warnt beim Start davor. Übers Internet besser
+> **`RELAY_AUTH=basic`** (ein Token, das nur die App kennt) und/oder `RELAY_CORS_ORIGIN` explizit setzen.
+
 ### `RELAY_REAL_IP`
 **Optionales** zusätzliches Leak-Veto: die **echte** (Nicht-VPN-)öffentliche IP deines Hosts. Stimmt
 die gemessene Egress-IP damit überein, wirkt der Tunnel **nicht** → `/health` meldet ehrlich
@@ -270,6 +301,16 @@ Alle mit sinnvollen Standards; `0` schaltet die Concurrency-/Rate-Grenze ab.
 - `RELAY_RATE_MAX` (Standard `600`) / `RELAY_RATE_WINDOW_MS` (Standard `60000`) — pro-Client-Ratelimit.
 - `RELAY_IDLE_TIMEOUT_MS` (Standard `30000`) — bricht einen Upstream ab, der keine Daten mehr sendet.
 - `RELAY_MAX_STREAM_MS` (Standard `0` = unbegrenzt) — harte Obergrenze je Stream; für lange Live-Streams bei `0` lassen.
+- `RELAY_UPSTREAM_TIMEOUT_MS` (Standard `20000`) — Obergrenze für Verbindungsaufbau + Zeit bis zu den Headern des Upstreams.
+- `RELAY_MAX_PLAYLIST_BYTES` (Standard `8388608` = 8 MiB) — HLS-Manifeste werden zum Umschreiben der
+  Segment-/Key-URLs im Speicher gepuffert; ein größeres Manifest wird abgelehnt statt gepuffert.
+
+### Nur-Test-Variablen (niemals in Produktion)
+Ausschließlich vom Test-Harness genutzt; beide **umgehen** echte Netz-/Routing-/VPN-Prüfungen und dürfen
+auf einem Live-Relay **nie** gesetzt sein (der Relay warnt beim Start, falls doch):
+- `RELAY_TEST_UPSTREAM` — Pfad zu einer JSON-Datei, die Ziel-URL → vorgefertigte Antwort abbildet; liefert
+  diese ohne echtes DNS/Routing/Socket aus.
+- `RELAY_NO_LISTEN=1` — lädt das Modul, ohne einen Port zu binden (zum Importieren der reinen Helfer).
 
 ---
 

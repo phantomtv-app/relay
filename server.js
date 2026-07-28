@@ -104,8 +104,13 @@ const ALLOW_UNPROTECTED = /^(1|on|true|yes)$/i.test(process.env.RELAY_ALLOW_UNPR
 // is 'deny' and every /p request is refused (fail-closed). 'open' (no protection) must be opted in.
 const AUTH_MODE = (process.env.RELAY_AUTH || 'deny').toLowerCase();
 const ALLOW_IPS = (process.env.RELAY_ALLOW || '').split(',').map((s) => s.trim()).filter(Boolean);
-const AUTH_USER = process.env.RELAY_USER || '';
-const AUTH_PASS = process.env.RELAY_PASS || '';
+// .trim() wie bei REAL_IP/ALLOW_IPS/TRUSTED_PROXIES oben: eine EnvironmentFile-Zeile (systemd/Docker)
+// schleppt je nach Editor/Zeilenende leicht ein Trailing-Whitespace oder CR mit. Die App trimmt die
+// eingegebenen Zugangsdaten ebenfalls (SettingsPanel handleRelayCredSave) -> beide Seiten kodieren
+// denselben String, sonst base64('user:pass\r') != base64('user:pass') -> stilles 401 trotz „korrekter"
+// Daten. Rand-Whitespace in Zugangsdaten ist ohnehin kein sinnvoller Anwendungsfall.
+const AUTH_USER = (process.env.RELAY_USER || '').trim();
+const AUTH_PASS = (process.env.RELAY_PASS || '').trim();
 // Bekannte Platzhalter-/Schwachpasswörter (aus .env.example, Anleitungen, üblichen Defaults). Wer
 // .env.example kopiert und den Port öffnet, hätte sonst ein Relay mit ÖFFENTLICH bekannten Zugangs-
 // daten. Nur das PASSWORT wird geprüft (der User 'phantom' ist unbedenklich). Case-insensitiv.

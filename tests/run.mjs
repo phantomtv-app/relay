@@ -248,6 +248,17 @@ async function main () {
 		check('(m) basic mit gültigem Header -> /health authorized:true', jOk.authorized === true, JSON.stringify(jOk));
 	});
 
+	// (o) Trim von RELAY_USER/RELAY_PASS (RC-Fix): eine EnvironmentFile-Zeile schleppt je nach Editor/
+	//     Zeilenende leicht Rand-Whitespace oder ein CR mit. Der Relay trimmt beide (wie die App die
+	//     Eingabe in SettingsPanel), sonst wäre base64('user:pass\r') != base64('user:pass') -> stilles
+	//     401 trotz „korrekter" Daten. Env absichtlich mit umgebendem Whitespace + Trailing-CR gesetzt;
+	//     der Header trägt exakt den sauberen Token, den der TV baut -> muss authorized:true ergeben.
+	await scenario({...NO_VPN, RELAY_AUTH: 'basic', RELAY_USER: '  phantom  ', RELAY_PASS: 'Zuf4ll-Str0ng-Pass\r'}, async ({base}) => {
+		const clean = Buffer.from('phantom:Zuf4ll-Str0ng-Pass').toString('base64');
+		const jOk = /** @type {any} */ (await (await fetch(`${base}/health`, {headers: {authorization: `Basic ${clean}`}})).json());
+		check('(o) Env mit Rand-Whitespace/CR -> getrimmte Credentials authorized:true', jOk.authorized === true, JSON.stringify(jOk));
+	});
+
 	// (n) HTTP-END-TO-END des /p-Body-Pfads über einen test-only Mock-Upstream (Reaudit Finding 4).
 	// RELAY_TEST_UPSTREAM liefert kanonische Upstream-Antworten OHNE DNS/Route/Socket -> der komplette
 	// /p-Pfad läuft ECHT über HTTP: Auth, Modus-Vertrag (raw/media), Dekompression (gzip), Body-Sniff,

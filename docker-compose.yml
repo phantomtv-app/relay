@@ -29,12 +29,14 @@ services:
       - "127.0.0.1:8787:8787"
     environment:
       - RELAY_VPN_IF=wg0
-      # Access control. NO default: if RELAY_AUTH is unset the relay DENIES /p (fail-closed). Pick one.
-      # User/password (recommended; use a strong random secret):
+      # Access control. NO default: if RELAY_AUTH is unset the relay DENIES /p (fail-closed, HTTP 403).
+      # A fresh `docker compose up -d` with the block below still commented = deny mode. Pick ONE:
+      # User/password (recommended). Docker does NOT auto-generate a password (only install.sh does),
+      # and placeholders like 'change-me' are REJECTED (fail-closed) - generate one: `openssl rand -hex 24`:
       #   - RELAY_AUTH=basic
       #   - RELAY_USER=phantom
-      #   - RELAY_PASS=change-me
-      # or only specific client IPs:
+      #   - RELAY_PASS=<paste output of: openssl rand -hex 24>
+      # or only specific client IPs (note: with CORS=* this is not origin/app auth - prefer basic online):
       #   - RELAY_AUTH=ip
       #   - RELAY_ALLOW=1.2.3.4,5.6.7.8
       # or, ONLY on a trusted LAN, no access control at all (explicit opt-in):
