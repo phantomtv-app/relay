@@ -1,7 +1,8 @@
-# Dependencies. server.js has ZERO runtime deps and runs without them. The only deps are
-# dev-only (typescript + @types/node for the // @ts-check type-check) and are NOT shipped.
+# Dependencies. server.js has ZERO runtime deps and runs without them; the only deps are dev-only
+# (typescript + @types/node for the // @ts-check type-check) and are NOT shipped. node_modules stays
+# out of git – but package-lock.json IS committed, damit die CI mit `npm ci` die gepinnte Dev-Toolchain
+# reproduzierbar installiert (Typecheck-Gate). `npm ci` scheitert ohne committetes Lockfile.
 node_modules
-package-lock.json
 
 # Runtime/logs
 *.log
